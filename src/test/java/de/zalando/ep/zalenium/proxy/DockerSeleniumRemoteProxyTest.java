@@ -1,8 +1,12 @@
 package de.zalando.ep.zalenium.proxy;
 
-import com.spotify.docker.client.exceptions.DockerException;
 import de.zalando.ep.zalenium.container.ContainerClient;
+import de.zalando.ep.zalenium.container.ContainerFactory;
+import de.zalando.ep.zalenium.container.kubernetes.KubernetesContainerClient;
+import de.zalando.ep.zalenium.dashboard.TestInformation;
+import de.zalando.ep.zalenium.util.DockerContainerMock;
 import de.zalando.ep.zalenium.util.Environment;
+import de.zalando.ep.zalenium.util.KubernetesContainerMock;
 import de.zalando.ep.zalenium.util.TestUtils;
 import org.awaitility.Duration;
 import org.junit.After;
@@ -13,45 +17,84 @@ import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 import org.junit.runners.Parameterized.Parameters;
 import org.openqa.grid.common.RegistrationRequest;
-import org.openqa.grid.internal.Registry;
+import org.openqa.grid.internal.DefaultGridRegistry;
+import org.openqa.grid.internal.GridRegistry;
 import org.openqa.grid.internal.TestSession;
 import org.openqa.grid.web.servlet.handler.RequestType;
 import org.openqa.grid.web.servlet.handler.WebDriverRequest;
+import org.openqa.selenium.Dimension;
 import org.openqa.selenium.Platform;
 import org.openqa.selenium.remote.BrowserType;
 import org.openqa.selenium.remote.CapabilityType;
+import org.openqa.selenium.remote.server.jmx.JMXHelper;
 
+import javax.management.MalformedObjectNameException;
+import javax.management.ObjectName;
 import javax.servlet.http.HttpServletResponse;
-import java.io.IOException;
-import java.net.URISyntaxException;
-import java.util.*;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.TimeZone;
 import java.util.concurrent.Callable;
+import java.util.function.Supplier;
 
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.*;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.withSettings;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.timeout;
+import static org.mockito.Mockito.never;
+
 
 @RunWith(value = Parameterized.class)
 public class DockerSeleniumRemoteProxyTest {
 
     private DockerSeleniumRemoteProxy proxy;
-    private Registry registry;
+    private GridRegistry registry;
     private ContainerClient containerClient;
+    private Supplier<ContainerClient> originalDockerContainerClient;
+    private KubernetesContainerClient originalKubernetesContainerClient;
+    private Supplier<Boolean> originalIsKubernetesValue;
+    private Supplier<Boolean> currentIsKubernetesValue;
 
-    public DockerSeleniumRemoteProxyTest(ContainerClient containerClient) {
+    public DockerSeleniumRemoteProxyTest(ContainerClient containerClient, Supplier<Boolean> isKubernetes) {
         this.containerClient = containerClient;
+        this.currentIsKubernetesValue = isKubernetes;
+        this.originalDockerContainerClient = ContainerFactory.getContainerClientGenerator();
+        this.originalIsKubernetesValue = ContainerFactory.getIsKubernetes();
+        this.originalKubernetesContainerClient = ContainerFactory.getKubernetesContainerClient();
     }
 
     @Parameters
     public static Collection<Object[]> data() {
+        Supplier<Boolean> bsFalse = () -> false;
+        Supplier<Boolean> bsTrue = () -> true;
         return Arrays.asList(new Object[][] {
-                {TestUtils.getMockedDockerContainerClient()}
+                {DockerContainerMock.getMockedDockerContainerClient(), bsFalse},
+                {DockerContainerMock.getMockedDockerContainerClient("host"), bsFalse},
+                {KubernetesContainerMock.getMockedKubernetesContainerClient(), bsTrue}
         });
     }
 
     @Before
-    public void setUp() throws DockerException, InterruptedException, IOException {
-        registry = Registry.newInstance();
+    public void setUp() {
+        // Change the factory to return our version of the Container Client
+        if (this.currentIsKubernetesValue.get()) {
+            // This is needed in order to use a fresh version of the mock, otherwise the return values
+            // are gone, and returning them always is not the normal behaviour.
+            this.containerClient = KubernetesContainerMock.getMockedKubernetesContainerClient();
+            ContainerFactory.setKubernetesContainerClient((KubernetesContainerClient) containerClient);
+        } else {
+            ContainerFactory.setContainerClientGenerator(() -> containerClient);
+        }
+        ContainerFactory.setIsKubernetes(this.currentIsKubernetesValue);
+
+        registry = DefaultGridRegistry.newInstance();
 
         // Creating the configuration and the registration request of the proxy (node)
         RegistrationRequest request = TestUtils.getRegistrationRequestForTesting(40000,
@@ -66,7 +109,12 @@ public class DockerSeleniumRemoteProxyTest {
     }
 
     @After
-    public void tearDown() {
+    public void tearDown() throws MalformedObjectNameException {
+        ObjectName objectName = new ObjectName("org.seleniumhq.grid:type=RemoteProxy,node=\"http://localhost:40000\"");
+        new JMXHelper().unregister(objectName);
+        ContainerFactory.setContainerClientGenerator(originalDockerContainerClient);
+        ContainerFactory.setIsKubernetes(originalIsKubernetesValue);
+        ContainerFactory.setKubernetesContainerClient(originalKubernetesContainerClient);
         proxy.restoreContainerClient();
     }
 
@@ -92,7 +140,7 @@ public class DockerSeleniumRemoteProxyTest {
         // Supported desired capability for the test session
         Map<String, Object> requestedCapability = getCapabilitySupportedByDockerSelenium();
         requestedCapability.put("name", "anyRandomTestName");
-        requestedCapability.put("group", "anyRandomTestGroup");
+        requestedCapability.put("build", "anyRandomTestBuild");
 
         {
             TestSession newSession = proxy.getNewSession(requestedCapability);
@@ -105,8 +153,23 @@ public class DockerSeleniumRemoteProxyTest {
             Assert.assertNull(newSession);
         }
 
-        Assert.assertEquals("anyRandomTestGroup", proxy.getTestGroup());
+        Assert.assertEquals("anyRandomTestBuild", proxy.getTestBuild());
         Assert.assertEquals("anyRandomTestName", proxy.getTestName());
+    }
+
+    @Test
+    public void sessionGetsCreatedEvenIfCapabilitiesAreNull() {
+        // Supported desired capability for the test session
+        Map<String, Object> requestedCapability = getCapabilitySupportedByDockerSelenium();
+        requestedCapability.put("name", null);
+        requestedCapability.put("build", null);
+        requestedCapability.put("version", null);
+
+        TestSession newSession = proxy.getNewSession(requestedCapability);
+        Assert.assertNotNull(newSession);
+
+        Assert.assertTrue(proxy.getTestBuild().isEmpty());
+        Assert.assertEquals(newSession.getInternalKey(), proxy.getTestName());
     }
 
     @Test
@@ -115,6 +178,29 @@ public class DockerSeleniumRemoteProxyTest {
         Map<String, Object> requestedCapability = new HashMap<>();
         requestedCapability.put(CapabilityType.BROWSER_NAME, BrowserType.IE);
         requestedCapability.put(CapabilityType.PLATFORM, Platform.WIN10);
+
+        TestSession newSession = proxy.getNewSession(requestedCapability);
+        Assert.assertNull(newSession);
+    }
+
+    @Test
+    public void noSessionIsCreatedWithSpecialScreenSize() {
+        // Non supported capabilities
+        Dimension customScreenSize = new Dimension(1280, 760);
+        Map<String, Object> requestedCapability = getCapabilitySupportedByDockerSelenium();
+        String screenResolution = String.format("%sx%s", customScreenSize.getWidth(), customScreenSize.getHeight());
+        requestedCapability.put("screenResolution", screenResolution);
+
+        TestSession newSession = proxy.getNewSession(requestedCapability);
+        Assert.assertNull(newSession);
+    }
+
+    @Test
+    public void noSessionIsCreatedWithSpecialTimeZone() {
+        // Non supported capabilities
+        TimeZone timeZone = TimeZone.getTimeZone("America/Montreal");
+        Map<String, Object> requestedCapability = getCapabilitySupportedByDockerSelenium();
+        requestedCapability.put("tz", timeZone.getID());
 
         TestSession newSession = proxy.getNewSession(requestedCapability);
         Assert.assertNull(newSession);
@@ -167,7 +253,7 @@ public class DockerSeleniumRemoteProxyTest {
     }
 
     @Test
-    public void pollerThreadTearsDownNodeAfterTestIsCompleted() throws IOException {
+    public void pollerThreadTearsDownNodeAfterTestIsCompleted() {
 
         // Supported desired capability for the test session
         Map<String, Object> requestedCapability = getCapabilitySupportedByDockerSelenium();
@@ -199,7 +285,7 @@ public class DockerSeleniumRemoteProxyTest {
     }
 
     @Test
-    public void normalSessionCommandsDoNotStopNode() throws IOException {
+    public void normalSessionCommandsDoNotStopNode() {
 
         // Supported desired capability for the test session
         Map<String, Object> requestedCapability = getCapabilitySupportedByDockerSelenium();
@@ -229,7 +315,40 @@ public class DockerSeleniumRemoteProxyTest {
     }
 
     @Test
-    public void nodeShutsDownWhenTestIsIdle() throws IOException {
+    public void testIsMarkedAsPassedAndFailedWithCookie() {
+
+        // Supported desired capability for the test session
+        Map<String, Object> requestedCapability = getCapabilitySupportedByDockerSelenium();
+
+        // Start poller thread
+        proxy.startPolling();
+
+        // Get a test session
+        TestSession newSession = proxy.getNewSession(requestedCapability);
+        Assert.assertNotNull(newSession);
+
+        // The node should be busy since there is a session in it
+        Assert.assertTrue(proxy.isBusy());
+
+        // We release the session, the node should be free
+        WebDriverRequest request = mock(WebDriverRequest.class);
+        HttpServletResponse response = mock(HttpServletResponse.class);
+        when(request.getMethod()).thenReturn("POST");
+        when(request.getRequestType()).thenReturn(RequestType.REGULAR);
+        when(request.getPathInfo()).thenReturn("/cookie");
+        when(request.getBody()).thenReturn("{\"cookie\": {\"name\": \"zaleniumTestPassed\", \"value\": true}}");
+
+        proxy.beforeCommand(newSession, request, response);
+        Assert.assertEquals(TestInformation.TestStatus.SUCCESS, proxy.getTestInformation().getTestStatus());
+
+        when(request.getBody()).thenReturn("{\"cookie\": {\"name\": \"zaleniumTestPassed\", \"value\": false}}");
+
+        proxy.beforeCommand(newSession, request, response);
+        Assert.assertEquals(TestInformation.TestStatus.FAILED, proxy.getTestInformation().getTestStatus());
+    }
+
+    @Test
+    public void nodeShutsDownWhenTestIsIdle() {
 
         // Supported desired capability for the test session
         Map<String, Object> requestedCapability = getCapabilitySupportedByDockerSelenium();
@@ -249,6 +368,7 @@ public class DockerSeleniumRemoteProxyTest {
         HttpServletResponse response = mock(HttpServletResponse.class);
         when(webDriverRequest.getMethod()).thenReturn("POST");
         when(webDriverRequest.getRequestType()).thenReturn(RequestType.START_SESSION);
+        when(webDriverRequest.getPathInfo()).thenReturn("/something");
         spyProxy.beforeCommand(newSession, webDriverRequest, response);
 
         // The node should be busy since there is a session in it
@@ -268,27 +388,27 @@ public class DockerSeleniumRemoteProxyTest {
                     .thenReturn("any_nonsense_value");
             when(environment.getBooleanEnvVariable(any(String.class), any(Boolean.class))).thenCallRealMethod();
             DockerSeleniumRemoteProxy.setEnv(environment);
-            DockerSeleniumRemoteProxy.readEnvVarForVideoRecording();
+            DockerSeleniumRemoteProxy.readEnvVars();
 
             Assert.assertEquals(DockerSeleniumRemoteProxy.DEFAULT_VIDEO_RECORDING_ENABLED,
-                    DockerSeleniumRemoteProxy.isVideoRecordingEnabled());
+                    proxy.isVideoRecordingEnabled());
         } finally {
             DockerSeleniumRemoteProxy.restoreEnvironment();
         }
     }
 
     @Test
-    public void videoRecordingIsStartedAndStopped() throws DockerException, InterruptedException,
-            URISyntaxException, IOException {
+    public void videoRecordingIsStartedAndStopped() throws MalformedObjectNameException {
+
+        try {
 
             // Create a docker-selenium container
             RegistrationRequest request = TestUtils.getRegistrationRequestForTesting(30000,
                     DockerSeleniumStarterRemoteProxy.class.getCanonicalName());
             DockerSeleniumStarterRemoteProxy dsProxy = new DockerSeleniumStarterRemoteProxy(request, registry);
             DockerSeleniumStarterRemoteProxy.setMaxDockerSeleniumContainers(1);
-            DockerSeleniumStarterRemoteProxy.setScreenHeight(DockerSeleniumStarterRemoteProxy.DEFAULT_SCREEN_HEIGHT);
-            DockerSeleniumStarterRemoteProxy.setScreenWidth(DockerSeleniumStarterRemoteProxy.DEFAULT_SCREEN_WIDTH);
-            DockerSeleniumStarterRemoteProxy.setTimeZone(DockerSeleniumStarterRemoteProxy.DEFAULT_TZ);
+            DockerSeleniumStarterRemoteProxy.setConfiguredScreenSize(DockerSeleniumStarterRemoteProxy.DEFAULT_SCREEN_SIZE);
+            DockerSeleniumStarterRemoteProxy.setContainerClient(containerClient);
             dsProxy.getNewSession(getCapabilitySupportedByDockerSelenium());
 
             // Creating a spy proxy to verify the invoked methods
@@ -306,13 +426,15 @@ public class DockerSeleniumRemoteProxyTest {
             HttpServletResponse response = mock(HttpServletResponse.class);
             when(webDriverRequest.getMethod()).thenReturn("POST");
             when(webDriverRequest.getRequestType()).thenReturn(RequestType.START_SESSION);
-            spyProxy.beforeCommand(newSession, webDriverRequest, response);
+            spyProxy.afterCommand(newSession, webDriverRequest, response);
 
             // Assert video recording started
+            String containerId = spyProxy.getContainerId();
             verify(spyProxy, times(1)).
                     videoRecording(DockerSeleniumRemoteProxy.DockerSeleniumContainerAction.START_RECORDING);
             verify(spyProxy, times(1)).
-                    processContainerAction(DockerSeleniumRemoteProxy.DockerSeleniumContainerAction.START_RECORDING, null);
+                    processContainerAction(DockerSeleniumRemoteProxy.DockerSeleniumContainerAction.START_RECORDING,
+                            containerId);
 
             // We release the sessions, the node should be free
             webDriverRequest = mock(WebDriverRequest.class);
@@ -328,12 +450,17 @@ public class DockerSeleniumRemoteProxyTest {
             verify(spyProxy, timeout(40000))
                     .videoRecording(DockerSeleniumRemoteProxy.DockerSeleniumContainerAction.STOP_RECORDING);
             verify(spyProxy, timeout(40000))
-                    .processContainerAction(DockerSeleniumRemoteProxy.DockerSeleniumContainerAction.STOP_RECORDING, null);
-            verify(spyProxy, timeout(40000)).copyVideos(null);
+                    .processContainerAction(DockerSeleniumRemoteProxy.DockerSeleniumContainerAction.STOP_RECORDING,
+                            containerId);
+            verify(spyProxy, timeout(40000)).copyVideos(containerId);
+        } finally {
+            ObjectName objectName = new ObjectName("org.seleniumhq.grid:type=RemoteProxy,node=\"http://localhost:30000\"");
+            new JMXHelper().unregister(objectName);
+        }
     }
 
     @Test
-    public void videoRecordingIsDisabled() throws DockerException, InterruptedException, IOException, URISyntaxException {
+    public void videoRecordingIsDisabled() throws MalformedObjectNameException {
 
         try {
             // Create a docker-selenium container
@@ -341,21 +468,22 @@ public class DockerSeleniumRemoteProxyTest {
                     DockerSeleniumStarterRemoteProxy.class.getCanonicalName());
             DockerSeleniumStarterRemoteProxy dsProxy = new DockerSeleniumStarterRemoteProxy(request, registry);
             DockerSeleniumStarterRemoteProxy.setMaxDockerSeleniumContainers(1);
-            DockerSeleniumStarterRemoteProxy.setScreenHeight(DockerSeleniumStarterRemoteProxy.DEFAULT_SCREEN_HEIGHT);
-            DockerSeleniumStarterRemoteProxy.setScreenWidth(DockerSeleniumStarterRemoteProxy.DEFAULT_SCREEN_WIDTH);
-            DockerSeleniumStarterRemoteProxy.setTimeZone(DockerSeleniumStarterRemoteProxy.DEFAULT_TZ);
-            DockerSeleniumStarterRemoteProxy.setConfiguredTimeZone(DockerSeleniumStarterRemoteProxy.DEFAULT_TZ);
+            DockerSeleniumStarterRemoteProxy.setConfiguredScreenSize(DockerSeleniumStarterRemoteProxy.DEFAULT_SCREEN_SIZE);
+            DockerSeleniumStarterRemoteProxy.setConfiguredTimeZone(DockerSeleniumStarterRemoteProxy.DEFAULT_TZ.getID());
+            DockerSeleniumStarterRemoteProxy.setContainerClient(containerClient);
             dsProxy.getNewSession(getCapabilitySupportedByDockerSelenium());
 
             // Mocking the environment variable to return false for video recording enabled
             Environment environment = mock(Environment.class);
             when(environment.getEnvVariable(DockerSeleniumRemoteProxy.ZALENIUM_VIDEO_RECORDING_ENABLED))
                     .thenReturn("false");
+            when(environment.getIntEnvVariable(DockerSeleniumRemoteProxy.ZALENIUM_MAX_TEST_SESSIONS, 1))
+                    .thenReturn(1);
 
             // Creating a spy proxy to verify the invoked methods
             DockerSeleniumRemoteProxy spyProxy = spy(proxy);
             DockerSeleniumRemoteProxy.setEnv(environment);
-            DockerSeleniumRemoteProxy.readEnvVarForVideoRecording();
+            DockerSeleniumRemoteProxy.readEnvVars();
 
             // Start poller thread
             spyProxy.startPolling();
@@ -369,7 +497,7 @@ public class DockerSeleniumRemoteProxyTest {
             HttpServletResponse response = mock(HttpServletResponse.class);
             when(webDriverRequest.getMethod()).thenReturn("POST");
             when(webDriverRequest.getRequestType()).thenReturn(RequestType.START_SESSION);
-            spyProxy.beforeCommand(newSession, webDriverRequest, response);
+            spyProxy.afterCommand(newSession, webDriverRequest, response);
 
             // Assert no video recording was started, videoRecording is invoked but processContainerAction should not
             verify(spyProxy, times(1))
@@ -396,6 +524,8 @@ public class DockerSeleniumRemoteProxyTest {
             verify(spyProxy, never()).copyVideos("");
         } finally {
             DockerSeleniumRemoteProxy.restoreEnvironment();
+            ObjectName objectName = new ObjectName("org.seleniumhq.grid:type=RemoteProxy,node=\"http://localhost:30000\"");
+            new JMXHelper().unregister(objectName);
         }
     }
 
@@ -406,7 +536,7 @@ public class DockerSeleniumRemoteProxyTest {
 
         TestSession newSession = proxy.getNewSession(requestedCapability);
         Assert.assertNotNull(newSession);
-        Assert.assertEquals(DockerSeleniumRemoteProxy.isVideoRecordingEnabled(), false);
+        Assert.assertEquals(proxy.isVideoRecordingEnabled(), false);
     }
 
     private Map<String, Object> getCapabilitySupportedByDockerSelenium() {

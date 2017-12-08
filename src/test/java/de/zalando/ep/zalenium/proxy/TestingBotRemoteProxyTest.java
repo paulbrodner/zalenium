@@ -5,13 +5,20 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import de.zalando.ep.zalenium.dashboard.Dashboard;
 import de.zalando.ep.zalenium.dashboard.TestInformation;
-import de.zalando.ep.zalenium.util.*;
+import de.zalando.ep.zalenium.util.CommonProxyUtilities;
+import de.zalando.ep.zalenium.util.Environment;
+import de.zalando.ep.zalenium.util.TestUtils;
 import org.hamcrest.CoreMatchers;
-import org.junit.*;
+import org.junit.After;
+import org.junit.Assert;
+import org.junit.Before;
+import org.junit.Rule;
+import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 import org.openqa.grid.common.RegistrationRequest;
+import org.openqa.grid.internal.DefaultGridRegistry;
 import org.openqa.grid.internal.ExternalSessionKey;
-import org.openqa.grid.internal.Registry;
+import org.openqa.grid.internal.GridRegistry;
 import org.openqa.grid.internal.RemoteProxy;
 import org.openqa.grid.internal.TestSession;
 import org.openqa.grid.web.servlet.handler.RequestType;
@@ -19,19 +26,26 @@ import org.openqa.grid.web.servlet.handler.WebDriverRequest;
 import org.openqa.selenium.Platform;
 import org.openqa.selenium.remote.BrowserType;
 import org.openqa.selenium.remote.CapabilityType;
+import org.openqa.selenium.remote.server.jmx.JMXHelper;
 
+import javax.management.MalformedObjectNameException;
+import javax.management.ObjectName;
 import javax.servlet.ServletOutputStream;
 import javax.servlet.http.HttpServletResponse;
 import java.io.File;
 import java.io.IOException;
-import java.util.*;
+import java.util.Collections;
+import java.util.Enumeration;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 import static org.mockito.Mockito.*;
 
 public class TestingBotRemoteProxyTest {
 
     private TestingBotRemoteProxy testingBotProxy;
-    private Registry registry;
+    private GridRegistry registry;
 
     @Rule
     public TemporaryFolder temporaryFolder = new TemporaryFolder();
@@ -39,7 +53,7 @@ public class TestingBotRemoteProxyTest {
     @SuppressWarnings("ConstantConditions")
     @Before
     public void setUp() throws IOException {
-        registry = Registry.newInstance();
+        registry = DefaultGridRegistry.newInstance();
         // Creating the configuration and the registration request of the proxy (node)
         RegistrationRequest request = TestUtils.getRegistrationRequestForTesting(30002,
                 TestingBotRemoteProxy.class.getCanonicalName());
@@ -74,7 +88,11 @@ public class TestingBotRemoteProxyTest {
     }
 
     @After
-    public void tearDown() {
+    public void tearDown() throws MalformedObjectNameException {
+        ObjectName objectName = new ObjectName("org.seleniumhq.grid:type=RemoteProxy,node=\"http://hub.testingbot.com:80\"");
+        new JMXHelper().unregister(objectName);
+        objectName = new ObjectName("org.seleniumhq.grid:type=RemoteProxy,node=\"http://localhost:30000\"");
+        new JMXHelper().unregister(objectName);
         TestingBotRemoteProxy.restoreCommonProxyUtilities();
         TestingBotRemoteProxy.restoreGa();
         TestingBotRemoteProxy.restoreEnvironment();
@@ -114,7 +132,7 @@ public class TestingBotRemoteProxyTest {
 
         // We need to mock all the needed objects to forward the session and see how in the beforeMethod
         // the TestingBot user and api key get added to the body request.
-        WebDriverRequest request = TestUtils.getMockedWebDriverRequestStartSession();
+        WebDriverRequest request = TestUtils.getMockedWebDriverRequestStartSession(BrowserType.IE, Platform.WIN8);
 
         HttpServletResponse response = mock(HttpServletResponse.class);
         ServletOutputStream stream = mock(ServletOutputStream.class);

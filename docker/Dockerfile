@@ -1,9 +1,9 @@
 #== Ubuntu xenial is 16.04, i.e. FROM ubuntu:16.04
 # Find latest images at https://hub.docker.com/r/library/ubuntu/
 # Layer size: big: ~130 MB
-FROM ubuntu:xenial-20170510
+FROM ubuntu:xenial-20171114
 ENV UBUNTU_FLAVOR="xenial" \
-    UBUNTU_DATE="20170510"
+    UBUNTU_DATE="20171114"
 
 #== Ubuntu flavors - common
 RUN  echo "deb http://archive.ubuntu.com/ubuntu ${UBUNTU_FLAVOR} main universe\n" > /etc/apt/sources.list \
@@ -70,9 +70,12 @@ RUN apt-key adv --keyserver keyserver.ubuntu.com --recv-keys A2F683C52980AECF \
 #   The non-interactive network downloader
 # curl             17 MB (real +diff when with wget: 7 MB)
 #   transfer URL data using various Internet protocols
+# apache2-utils
+#   utility programs for webservers, needed to use htpasswd when the grid
+#   should be protected
 #
-# Layer size: medium: 29.8 MB
-# Layer size: medium: 27.9 MB (with --no-install-recommends)
+# Layer size: medium: 33.3 MB
+# Layer size: medium: 31.4 MB (with --no-install-recommends)
 RUN apt-get -qqy update \
   && apt-get -qqy install \
     libltdl7 \
@@ -91,6 +94,7 @@ RUN apt-get -qqy update \
     dbus-x11 \
     wget \
     curl \
+    apache2-utils \
   && apt-get -qyy autoremove \
   && rm -rf /var/lib/apt/lists/*
 
@@ -189,8 +193,14 @@ RUN useradd seluser \
          --create-home \
   && usermod -a -G sudo seluser \
   && gpasswd -a seluser video \
-  && echo 'ALL ALL = (ALL) NOPASSWD: ALL' >> /etc/sudoers \
-  && echo 'seluser:secret' | chpasswd
+  && echo 'seluser:secret' | chpasswd \
+  && useradd extrauser \
+         --shell /bin/bash  \
+  && usermod -a -G sudo extrauser \
+  && gpasswd -a extrauser video \
+  && gpasswd -a extrauser seluser \
+  && echo 'extrauser:secret' | chpasswd \
+  && echo 'ALL ALL = (ALL) NOPASSWD: ALL' >> /etc/sudoers
 
 #==============================
 # Java8 - OpenJDK JRE headless
@@ -242,76 +252,61 @@ RUN wget -nv -O /usr/bin/gosu \
 # Var `DOCKER` points to which binary to use at runtime
 ENV DOCKER_HOST="unix:///var/run/docker.sock" \
     DOCKER_BUCKET="get.docker.com" \
-    DOCKER="1.12"
-
-#-----------------------
-# Docker 1.11.2 -- 35 MB
-#-----------------------
-# https://github.com/docker-library/docker/blob/master/1.11/Dockerfile
-RUN set -x \
-  && DOCKER_VERSION="1.11.2" \
-     DOCKER_SHA256="8c2e0c35e3cda11706f54b2d46c2521a6e9026a7b13c7d4b8ae1f3a706fc55e1" \
-  && curl -fSL "https://${DOCKER_BUCKET}/builds/Linux/x86_64/docker-${DOCKER_VERSION}.tgz" \
-          -o docker.tgz \
-  && echo "${DOCKER_SHA256} *docker.tgz" | sha256sum -c - \
-  && tar -xzvf docker.tgz \
-  && mv docker/docker /usr/bin/docker-${DOCKER_VERSION} \
-  && rm -rf docker/ && rm docker.tgz \
-  && docker-${DOCKER_VERSION} --version | grep "${DOCKER_VERSION}"
-
-#-----------------------
-# Docker 1.12.6 -- 15 MB
-#-----------------------
-# https://github.com/docker-library/docker/blob/master/1.12/Dockerfile#L1
-RUN set -x \
-  && DOCKER_VERSION="1.12.6" \
-     DOCKER_SHA256="cadc6025c841e034506703a06cf54204e51d0cadfae4bae62628ac648d82efdd" \
-  && curl -fSL "https://${DOCKER_BUCKET}/builds/Linux/x86_64/docker-${DOCKER_VERSION}.tgz" \
-          -o docker.tgz \
-  && echo "${DOCKER_SHA256} *docker.tgz" | sha256sum -c - \
-  && tar -xzvf docker.tgz \
-  && mv docker/docker /usr/bin/docker-${DOCKER_VERSION} \
-  && rm -rf docker/ && rm docker.tgz \
-  && docker-${DOCKER_VERSION} --version | grep "${DOCKER_VERSION}"
-
-#-----------------------
-# Docker 1.13.0 -- 15 MB
-#-----------------------
-# https://github.com/docker-library/docker/blob/master/1.13/Dockerfile#L1
-# Starting with 1.13, newer CLIs can talk to older daemons
-RUN set -x \
-  && DOCKER_VERSION="1.13.1" \
-     DOCKER_SHA256="97892375e756fd29a304bd8cd9ffb256c2e7c8fd759e12a55a6336e15100ad75" \
-  && curl -fSL "https://${DOCKER_BUCKET}/builds/Linux/x86_64/docker-${DOCKER_VERSION}.tgz" \
-          -o docker.tgz \
-  && echo "${DOCKER_SHA256} *docker.tgz" | sha256sum -c - \
-  && tar -xzvf docker.tgz \
-  && mv docker/docker /usr/bin/docker \
-  && rm -rf docker/ && rm docker.tgz \
-  && docker --version | grep "${DOCKER_VERSION}"
+    DOCKER="17.06.2-ce"
 
 #----------------------------
-# Docker 17.03.0-ce -- 15 MB
+# Docker 17.03.1-ce -- 15 MB
 #----------------------------
 # https://github.com/docker-library/docker/blob/master/17.03/Dockerfile
 # Note: Starting with 1.13, newer CLIs can talk to older daemons
 RUN set -x \
-  && DOCKER_VERSION="17.03.0-ce" \
-     DOCKER_SHA256="4a9766d99c6818b2d54dc302db3c9f7b352ad0a80a2dc179ec164a3ba29c2d3e" \
+  && DOCKER_VERSION="17.03.1-ce" \
+     DOCKER_SHA256="820d13b5699b5df63f7032c8517a5f118a44e2be548dd03271a86656a544af55" \
   && curl -fSL "https://${DOCKER_BUCKET}/builds/Linux/x86_64/docker-${DOCKER_VERSION}.tgz" \
           -o docker.tgz \
   && echo "${DOCKER_SHA256} *docker.tgz" | sha256sum -c - \
   && tar -xzvf docker.tgz \
-  && mv docker/docker /usr/bin/docker \
+  && mv docker/docker /usr/bin/docker-${DOCKER_VERSION} \
   && rm -rf docker/ && rm docker.tgz \
-  && docker --version | grep "${DOCKER_VERSION}"
+  && docker-${DOCKER_VERSION} --version | grep "${DOCKER_VERSION}"
+
+ENV DOCKER_BUCKET="download.docker.com"
+
+#----------------------------
+# Docker 17.06.2-ce -- 15 MB
+#----------------------------
+# https://github.com/docker-library/docker/blob/master/17.06/Dockerfile
+# Note: Starting with 1.13, newer CLIs can talk to older daemons
+RUN set -x \
+  && DOCKER_VERSION="17.06.2-ce" \
+  && curl -fSL "https://${DOCKER_BUCKET}/linux/static/stable/x86_64/docker-${DOCKER_VERSION}.tgz" \
+          -o docker.tgz \
+  && tar -xzvf docker.tgz \
+  && mv docker/docker /usr/bin/docker-${DOCKER_VERSION} \
+  && rm -rf docker/ && rm docker.tgz \
+  && docker-${DOCKER_VERSION} --version | grep "${DOCKER_VERSION}"
+
+#----------------------------
+# Docker 17.09.0-ce -- 15 MB
+#----------------------------
+# https://github.com/docker-library/docker/blob/master/17.09/Dockerfile
+# Note: Starting with 1.13, newer CLIs can talk to older daemons
+RUN set -x \
+  && DOCKER_VERSION="17.09.0-ce" \
+  && curl -fSL "https://${DOCKER_BUCKET}/linux/static/stable/x86_64/docker-${DOCKER_VERSION}.tgz" \
+          -o docker.tgz \
+  && tar -xzvf docker.tgz \
+  && mv docker/docker /usr/bin/docker-${DOCKER_VERSION} \
+  && rm -rf docker/ && rm docker.tgz \
+  && docker-${DOCKER_VERSION} --version | grep "${DOCKER_VERSION}"
+
 
 # ------------------------#
 # Sauce Connect Tunneling #
 # ------------------------#
 # https://docs.saucelabs.com/reference/sauce-connect/
 # Layer size: medium: ~13 MB
-ENV SAUCE_CONN_VER="sc-4.4.6-linux" \
+ENV SAUCE_CONN_VER="sc-4.4.10-linux" \
     SAUCE_CONN_DOWN_URL="https://saucelabs.com/downloads"
 RUN cd /tmp \
   && wget -nv "${SAUCE_CONN_DOWN_URL}/${SAUCE_CONN_VER}.tar.gz" \
@@ -367,6 +362,8 @@ RUN  export SELBASE="https://selenium-release.storage.googleapis.com" \
 #==========
 # Zalenium
 #==========
+EXPOSE 4444 4445
+
 ENV ZAL_VER="${project.build.finalName}" \
     BROWSER_STACK_TUNNEL_OPTS="-skipCheck -v -forcelocal" \
     BROWSER_STACK_TUNNEL_ID="zalenium" \
@@ -382,25 +379,28 @@ ENV ZAL_VER="${project.build.finalName}" \
     TESTINGBOT_TUNNEL="false" \
     TESTINGBOT_WAIT_TIMEOUT="2m"
 
-COPY entry.sh /usr/bin/
-COPY log /usr/bin/
-COPY error /usr/bin/
-COPY zalenium.sh /home/seluser/
-COPY LICENSE.md /home/seluser/
-COPY Analytics.md /home/seluser/
+COPY entry.sh log warn error /usr/bin/
 COPY nginx.conf /etc/nginx/
-COPY start-browserstack.sh /home/seluser/
-COPY wait-browserstack.sh /home/seluser/
-COPY start-saucelabs.sh /home/seluser/
-COPY wait-saucelabs.sh /home/seluser/
-COPY start-testingbot.sh /home/seluser/
-COPY wait-testingbot.sh /home/seluser/
-COPY list_template.html /home/seluser/
-COPY dashboard_template.html /home/seluser/
-COPY zalando.ico /home/seluser/
 COPY css/ /home/seluser/css/
 COPY js/ /home/seluser/js/
-COPY index.html /home/seluser/index.html
+COPY zalenium.sh \
+ LICENSE.md \
+ Analytics.md \
+ start-browserstack.sh \
+ wait-browserstack.sh \
+ start-saucelabs.sh \
+ wait-saucelabs.sh \
+ start-testingbot.sh \
+ wait-testingbot.sh \
+ list_template.html \
+ dashboard_template.html \
+ index.html \
+ zalando.ico \
+ logging_info.properties \
+ logging_fine.properties \
+ logback.xml \
+ /home/seluser/
+COPY scm-source.json /
 COPY ${ZAL_VER}.jar /home/seluser/${ZAL_VER}.jar
 
 #-----------------#
@@ -414,11 +414,17 @@ RUN sudo chmod +x /home/seluser/zalenium.sh \
   && sudo chmod +x /home/seluser/start-testingbot.sh \
   && sudo chmod +x /home/seluser/wait-testingbot.sh \
   && sudo chmod +x /usr/bin/log \
+  && sudo chmod +x /usr/bin/warn \
   && sudo chmod +x /usr/bin/error \
-  && sudo chmod +x /usr/bin/entry.sh
+  && sudo chmod +x /usr/bin/entry.sh \
+  && sudo chmod 777 /etc/passwd \
+  && sudo chown -R seluser:seluser /home/seluser
 
-# We need the entry.sh to run as root so we can change the uid later on
-USER root
+# Allows different operations in Openshift environments
+# https://docs.openshift.com/container-platform/latest/creating_images/guidelines.html#openshift-specific-guidelines
+RUN sudo chgrp -R 0 /home/seluser && \
+    sudo chmod -R g=u /home/seluser && \
+    sudo chmod -R u+x /home/seluser
 
 # IMPORTANT: Using the string form `CMD "entry.sh"` without
 # brackets [] causes Docker to run your process

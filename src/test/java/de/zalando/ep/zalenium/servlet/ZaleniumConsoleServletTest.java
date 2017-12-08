@@ -1,20 +1,34 @@
 package de.zalando.ep.zalenium.servlet;
 
-import de.zalando.ep.zalenium.proxy.*;
+import de.zalando.ep.zalenium.container.ContainerClient;
+import de.zalando.ep.zalenium.container.ContainerFactory;
+import de.zalando.ep.zalenium.proxy.BrowserStackRemoteProxy;
+import de.zalando.ep.zalenium.proxy.DockerSeleniumRemoteProxy;
+import de.zalando.ep.zalenium.proxy.DockerSeleniumStarterRemoteProxy;
+import de.zalando.ep.zalenium.proxy.SauceLabsRemoteProxy;
+import de.zalando.ep.zalenium.proxy.TestingBotRemoteProxy;
 import de.zalando.ep.zalenium.util.CommonProxyUtilities;
+import de.zalando.ep.zalenium.util.DockerContainerMock;
 import de.zalando.ep.zalenium.util.TestUtils;
+
+import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 import org.openqa.grid.common.RegistrationRequest;
-import org.openqa.grid.internal.Registry;
+import org.openqa.grid.internal.DefaultGridRegistry;
+import org.openqa.grid.internal.GridRegistry;
+import org.openqa.grid.internal.utils.configuration.GridHubConfiguration;
+import org.openqa.grid.web.Hub;
+import org.openqa.selenium.MutableCapabilities;
 import org.openqa.selenium.Platform;
-import org.openqa.selenium.remote.DesiredCapabilities;
+import org.openqa.selenium.remote.CapabilityType;
 
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.util.List;
+import java.util.function.Supplier;
 
 import static org.hamcrest.CoreMatchers.containsString;
 import static org.hamcrest.MatcherAssert.assertThat;
@@ -23,13 +37,17 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 public class ZaleniumConsoleServletTest {
-    private Registry registry;
+    private GridRegistry registry;
     private HttpServletRequest request;
     private HttpServletResponse response;
+    private Supplier<ContainerClient> originalContainerClient;
 
     @Before
     public void setUp() throws IOException {
-        registry = Registry.newInstance();
+        registry = DefaultGridRegistry.newInstance(new Hub(new GridHubConfiguration()));
+        
+        this.originalContainerClient = ContainerFactory.getContainerClientGenerator();
+        ContainerFactory.setContainerClientGenerator(DockerContainerMock::getMockedDockerContainerClient);
 
         // Creating the configuration and the registration request of the proxy (node)
         RegistrationRequest registrationRequest = TestUtils.getRegistrationRequestForTesting(30000,
@@ -59,10 +77,10 @@ public class ZaleniumConsoleServletTest {
         registrationRequest = TestUtils.getRegistrationRequestForTesting(40001,
                 DockerSeleniumRemoteProxy.class.getCanonicalName());
         registrationRequest.getConfiguration().capabilities.clear();
-        List<DesiredCapabilities> capabilities = DockerSeleniumStarterRemoteProxy.getCapabilities();
-        DesiredCapabilities desiredCapabilities = new DesiredCapabilities();
-        desiredCapabilities.setBrowserName("NEW_BROWSER");
-        desiredCapabilities.setPlatform(Platform.LINUX);
+        List<MutableCapabilities> capabilities = DockerSeleniumStarterRemoteProxy.getCapabilities();
+        MutableCapabilities desiredCapabilities = new MutableCapabilities();
+        desiredCapabilities.setCapability(CapabilityType.BROWSER_NAME, "NEW_BROWSER");
+        desiredCapabilities.setCapability(CapabilityType.PLATFORM, Platform.LINUX);
         desiredCapabilities.setCapability(RegistrationRequest.MAX_INSTANCES, 1);
         capabilities.add(desiredCapabilities);
         registrationRequest.getConfiguration().capabilities.addAll(capabilities);
@@ -130,5 +148,10 @@ public class ZaleniumConsoleServletTest {
 
         zaleniumResourceServlet.doGet(httpServletRequest, httpServletResponse);
         assertThat(httpServletResponse.getOutputStream().toString(), containsString("PNG"));
+    }
+    
+    @After
+    public void tearDown() {
+        ContainerFactory.setContainerClientGenerator(originalContainerClient);
     }
 }

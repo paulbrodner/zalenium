@@ -5,27 +5,32 @@
 [![Build Status](https://travis-ci.org/zalando/zalenium.svg?branch=master)](https://travis-ci.org/zalando/zalenium)
 [![Codacy Badge](https://api.codacy.com/project/badge/Grade/c719a14f5537488b8fb95d70e27acd5f)](https://www.codacy.com/app/diemol_zalenium/zalenium?utm_source=github.com&amp;utm_medium=referral&amp;utm_content=zalando/zalenium&amp;utm_campaign=Badge_Grade)
 [![codecov](https://codecov.io/gh/zalando/zalenium/branch/master/graph/badge.svg)](https://codecov.io/gh/zalando/zalenium)
-[![](https://images.microbadger.com/badges/version/dosel/zalenium.svg)](https://microbadger.com/images/dosel/zalenium)
+[![GitHub release](https://img.shields.io/github/release/zalando/zalenium.svg)]()
 [![Docker Pulls](https://img.shields.io/docker/pulls/dosel/zalenium.svg)](https://hub.docker.com/r/dosel/zalenium/tags/)
 [![Gitter](https://badges.gitter.im/zalando/zalenium.svg)](https://gitter.im/zalando/zalenium?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge)
 
 
 # Zalenium
 This is a Selenium Grid extension to scale your local grid dynamically with docker containers. It uses
-[docker-selenium](https://github.com/elgalu/docker-selenium) to run your tests in Firefox and Chrome locally, and when
-you need a different browser, your tests can get redirected to a cloud testing provider ([Sauce Labs](https://saucelabs.com/), [BrowserStack](https://www.browserstack.com/), [TestingBot](https://testingbot.com/)).
+[docker-selenium](https://github.com/elgalu/docker-selenium) to run your tests in Firefox and Chrome locally, if you
+need a different browser, your tests can get redirected to a cloud testing provider ([Sauce Labs](https://saucelabs.com/), 
+[BrowserStack](https://www.browserstack.com/), [TestingBot](https://testingbot.com/)). Zalenium has also support for 
+[Kubernetes](./docs/k8s/kubernetes.md).
 
-Features are added often to Zalenium, we invite you to test it, to contribute, to report bugs, and suggest any ideas you may
-have, see [contributing](CONTRIBUTING.md) for more details.
+Zalenium's maintainers add new features regularly. We invite you to test it, report bugs, suggest any ideas you may
+have, and contribute. See our [contributing guidelines](CONTRIBUTING.md) for more details.
 
 ### Why?
-We know how complicated is to:
+
+> Thanks for open sourcing this. Our test suite run time has dropped from more than an hour to six minutes. — [@TKueck](https://twitter.com/Tkueck/status/887425829273088000)
+
+We know how complicated it is to:
 * Have a stable grid to run UI tests with Selenium
 * Maintain it over time (keep up with new browser, Selenium and drivers versions)
 * Provide capabilities to cover all browsers and platforms
 
 That is why we took this approach where [docker-selenium](https://github.com/elgalu/docker-selenium) nodes are
-created on demand. Your UI tests in Firefox and Chrome will run faster beause they are running on a local grid,
+created on demand. Your UI tests in Firefox and Chrome will run faster because they are running on a local grid,
 on a node created from scratch and disposed after the test completes.
 
 If you need a capability that cannot be fulfilled by [docker-selenium](https://github.com/elgalu/docker-selenium),
@@ -36,6 +41,17 @@ Zalenium's main goal is: to allow anyone to have a disposable and flexible Selen
 
 Part of the idea comes from this [Sauce Labs post](https://saucelabs.com/blog/introducing-the-sauce-plugin-for-selenium-grid).
 
+### What does **Zalenium** mean?
+As you can imagine, it is the result of mixing _[Zalando](https://tech.zalando.com)_ and _[Selenium](http://www.seleniumhq.org/)_.
+As mentioned before, this project's aim is to provide a simple way to create a grid and contribute to the Selenium community.
+Nevertheless, this is _**not**_ an official [Selenium](http://www.seleniumhq.org/) project. We kindly ask you to post
+[issues](https://github.com/zalando/zalenium/issues/new) or [questions](https://gitter.im/zalando/zalenium) through the
+channels we created for that.
+
+***
+
+## Contents
+
 * [Getting Started](#getting-started)
   * [Prerequisites](#prerequisites)
   * [Set it up](#set-it-up)
@@ -44,11 +60,13 @@ Part of the idea comes from this [Sauce Labs post](https://saucelabs.com/blog/in
 * [Docker version](#docker-version)
   * [Linux](#linux)
   * [OSX](#osx)
+* [Kubernetes version](./docs/k8s/kubernetes.md)
 * [Contributions](#contributions)
   * [Building and Testing](#building-and-testing)
 * [How it works](#how-it-works)
 * [About the project versioning](#about-the-project-versioning)
 * [Usage examples](./docs/usage_examples.md)
+* [Performance](./docs/performance.md)
 
 ## Getting Started
 
@@ -69,11 +87,16 @@ Zalenium uses docker to scale on-demand, therefore we need to give it the `docke
 * Basic usage, without any of the integrated cloud testing platforms enabled:
 
   ```sh
-    docker run --rm -ti --name zalenium -p 4444:4444 -p 5555:5555 \
+    docker run --rm -ti --name zalenium -p 4444:4444 \
       -v /var/run/docker.sock:/var/run/docker.sock \
       -v /tmp/videos:/home/seluser/videos \
-      dosel/zalenium start
+      --privileged dosel/zalenium start
   ```
+
+  * Why `--privileged`? We suggest you run Zalenium as `--privileged` to speed up the node registration process by
+      increasing the entropy level with [Haveged](http://www.issihosts.com/haveged/). Using `--privileged` is optional
+      since it is just meant to improve its performance. For more information, check this
+      [tutorial](https://www.digitalocean.com/community/tutorials/how-to-setup-additional-entropy-for-cloud-servers-using-haveged).
 
 * You can also try our one line installer and starter (it will check for the latest images and ask for missing
 dependencies.)
@@ -84,13 +107,14 @@ dependencies.)
 
 * More usage examples, more parameters, configurations, video usage and one line starters can be seen [here](./docs/usage_examples.md)
 * After the output, you should see the DockerSeleniumStarter node in the [grid](http://localhost:4444/grid/console)
-* Now you can point your Selenium tests to [http://localhost:4444/wd/hub](http://localhost:4444/wd/hub).
+* Now you can point your Selenium tests to [http://localhost:4444/wd/hub](http://localhost:4444/wd/hub)
 * Stop it: `docker stop zalenium`
 
 ## Additional features
-* __[BETA]__ [Dashboard](http://localhost:5555), see all the videos and aggregated logs after your tests completed
+* [Dashboard](http://localhost:4444/dashboard), see all the videos and aggregated logs after your tests completed. 
+Check a live demo [here](http://zalenium.bitballoon.com/dashboard)
   <p align="center">
-    <img id="dashboard" height="367" width="600" src="./images/dashboard.gif" />
+    <img id="dashboard" height="352" width="600" src="./images/dashboard.gif" />
   </p>
 * Live preview of your running tests [http://localhost:4444/grid/admin/live](http://localhost:4444/grid/admin/live)
 <p align="center">
@@ -99,6 +123,7 @@ dependencies.)
 
 * Video recording, check them in the `/tmp/videos` folder (or the one you mapped when starting Zalenium)
 * Customise video file naming via capabilities and [more](./docs/usage_examples.md)
+* Basic auth to protect the grid when deployed to the open internet, instructions to enable basic auth [here](./docs/usage_examples.md#enabling-basic-auth-in-zalenium)
 
 ## Docker version
 
@@ -106,29 +131,42 @@ dependencies.)
 For Linux systems you can simply share the docker binary via `-v $(which docker):/usr/bin/docker`
 
 ```sh
-docker run --rm -ti --name zalenium -p 4444:4444 -p 5555:5555 \
+docker run --rm -ti --name zalenium -p 4444:4444 \
   -v $(which docker):/usr/bin/docker \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v /tmp/videos:/home/seluser/videos \
-  dosel/zalenium start
+  --privileged dosel/zalenium start
 ```
 
 #### OSX
-Zalenium for OSX is currently compatible with Docker `1.11`, `1.12` __default__ and `1.13`. In Mac is recommended that
-you explicitly tell Zalenium which major version you are using via `-e DOCKER=1.11` due to API compatibility issues.
-In the future this will be automated on our side as it is with Linux (read above)
+Zalenium for OSX is currently compatible with Docker `17.03.1-ce`, `17.06.2-ce`, and `17.09.0-ce`. Nevertheless, starting
+with 1.13, newer CLIs can talk to older daemons. If you bump into any API compatibility issues, you can explicitly tell
+Zalenium which version you are using via `-e DOCKER=17.06.2-ce`.
 
 ```sh
-docker run --rm -ti --name zalenium -p 4444:4444 -p 5555:5555 \
-  -e DOCKER=1.11 \
+docker run --rm -ti --name zalenium -p 4444:4444 \
+  -e DOCKER=17.06.2-ce \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v /tmp/videos:/home/seluser/videos \
-  dosel/zalenium start
+  --privileged dosel/zalenium start
+```
+
+### Windows 
+
+```sh
+docker run --rm -ti --name zalenium -p 4444:4444 \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /c/Users/your_user_name/temp/videos:/home/seluser/videos \
+  --privileged dosel/zalenium start      
 ```
 
 ## Contributions
 Any feedback or contributions are welcome! Please check our [guidelines](CONTRIBUTING.md), they just follow the general
-GitHub issue/PR flow.
+GitHub issue/PR flow. 
+
+Also, we have adopted the Contributor Covenant as the code of conduct for this project:
+
+http://contributor-covenant.org/version/1/4/
 
 #### Building and Testing
 
@@ -148,10 +186,10 @@ running and that you can do `docker ps`):
     ```
 * Running the image you just built
     ```sh
-      docker run --rm -ti --name zalenium -p 4444:4444 -p 5555:5555 \
+      docker run --rm -ti --name zalenium -p 4444:4444 \
         -v /var/run/docker.sock:/var/run/docker.sock \
         -v /tmp/videos:/home/seluser/videos \
-        zalenium:YOUR_TAG start
+        --privileged zalenium:YOUR_TAG start
     ```
 * Running the integration tests with Sauce Labs or BrowserStack or TestingBot. You will need an account on any of those providers 
 to run them (they have free plans). Or you can just run some of our [tests](./src/test/java/de/zalando/tip/zalenium/it/ParallelIT.java)
@@ -182,9 +220,9 @@ one of the enabled cloud testing platforms.
 * To make life easy for people who want to use Zalenium, we are now using as a version number the Selenium version
 being supported.
 * The major-minor version combined with the patch level will indicate the Selenium version being supported. E.g.
-  * When a release is `3.2.0a`, it supports Selenium 3.2.0
+  * When a release is `3.8.1a`, it supports Selenium 3.8.1
   * The badge above shows the latest image version
-  * Alias for the latest images, `dosel/zalenium:3`
+  * Alias for the latest images, `dosel/zalenium:latest`
 
 ## Zalenium in the Selenium Conf Austin 2017
 Get a better overview of what Zalenium is and how it works by checking the recorded talk [here](https://www.youtube.com/watch?v=W5qMsVrob6I)
@@ -201,3 +239,9 @@ License
 ===================
 
 See [License](LICENSE.md)
+
+
+Security
+===================
+
+See [Security](SECURITY.md)

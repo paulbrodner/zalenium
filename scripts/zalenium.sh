@@ -1,26 +1,35 @@
 #!/usr/bin/env bash
 
 CONTAINER_NAME="zalenium"
-CONTAINER_LIVE_PREVIEW_PORT="5555"
+SELENIUM_IMAGE_NAME="elgalu/selenium"
+MAX_TEST_SESSIONS=1
 CHROME_CONTAINERS=1
 FIREFOX_CONTAINERS=1
+DESIRED_CONTAINERS=2
 MAX_DOCKER_SELENIUM_CONTAINERS=10
 SELENIUM_ARTIFACT="$(pwd)/selenium-server-standalone-${selenium-server.major-minor.version}.${selenium-server.patch-level.version}.jar"
 ZALENIUM_ARTIFACT="$(pwd)/${project.build.finalName}.jar"
+DEPRECATED_PARAMETERS=false
 SAUCE_LABS_ENABLED=false
 BROWSER_STACK_ENABLED=false
 TESTINGBOT_ENABLED=false
 VIDEO_RECORDING_ENABLED=true
-SCREEN_WIDTH=1900
-SCREEN_HEIGHT=1880
+SCREEN_WIDTH=1920
+SCREEN_HEIGHT=1080
 TZ="Europe/Berlin"
 SEND_ANONYMOUS_USAGE_INFO=true
 START_TUNNEL=false
 DEBUG_ENABLED=false
+KEEP_ONLY_FAILED_TESTS=false
 
 GA_TRACKING_ID="UA-88441352-3"
 GA_ENDPOINT=https://www.google-analytics.com/collect
 GA_API_VERSION="1"
+
+KUBERNETES_ENABLED=false
+if [ -f /var/run/secrets/kubernetes.io/serviceaccount/token ]; then
+    KUBERNETES_ENABLED=true
+fi
 
 PID_PATH_SELENIUM=/tmp/selenium-pid
 PID_PATH_DOCKER_SELENIUM_NODE=/tmp/docker-selenium-node-pid
@@ -46,7 +55,7 @@ WaitSeleniumHub()
     # Other option is to wait for certain text at
     #  logs/stdout.zalenium.hub.log
     while ! curl -sSL "http://localhost:4444/wd/hub/status" 2>&1 \
-            | jq -r '.status' 2>&1 | grep "13" >/dev/null; do
+            | jq -r '.status' 2>&1 | grep "0" >/dev/null; do
         echo -n '.'
         sleep 0.2
     done
@@ -58,7 +67,7 @@ WaitStarterProxy()
     # Other option is to wait for certain text at
     #  logs/stdout.zalenium.docker.node.log
     while ! curl -sSL "http://localhost:30000/wd/hub/status" 2>&1 \
-            | jq -r '.state' 2>&1 | grep "success" >/dev/null; do
+            | jq -r '.status' 2>&1 | grep "0" >/dev/null; do
         echo -n '.'
         sleep 0.2
     done
@@ -80,16 +89,14 @@ WaitSauceLabsProxy()
 {
     # Wait for the sauce node success
     while ! curl -sSL "http://localhost:30001/wd/hub/status" 2>&1 \
-            | jq -r '.state' 2>&1 | grep "success" >/dev/null; do
+            | jq -r '.status' 2>&1 | grep "0" >/dev/null; do
         echo -n '.'
         sleep 0.2
     done
 
-    # Also wait for the sauce url though this is optional
-    DONE_MSG="ondemand.saucelabs.com"
-    # Using the ZALENIUM_CONTAINER_NAME environment variable here because this method is exported and does not
-    # see the variables declared at the beginning
-    while ! docker logs ${ZALENIUM_CONTAINER_NAME} | grep "${DONE_MSG}" >/dev/null; do
+    # Also wait for the Proxy to be registered into the hub
+    while ! curl -sSL "http://localhost:4444/grid/console" 2>&1 \
+            | grep "SauceLabsRemoteProxy" 2>&1 >/dev/null; do
         echo -n '.'
         sleep 0.2
     done
@@ -100,16 +107,14 @@ WaitBrowserStackProxy()
 {
     # Wait for the sauce node success
     while ! curl -sSL "http://localhost:30002/wd/hub/status" 2>&1 \
-            | jq -r '.state' 2>&1 | grep "success" >/dev/null; do
+            | jq -r '.status' 2>&1 | grep "0" >/dev/null; do
         echo -n '.'
         sleep 0.2
     done
 
-    # Also wait for the sauce url though this is optional
-    DONE_MSG="hub-cloud.browserstack.com"
-    # Using the ZALENIUM_CONTAINER_NAME environment variable here because this method is exported and does not
-    # see the variables declared at the beginning
-    while ! docker logs ${ZALENIUM_CONTAINER_NAME} | grep "${DONE_MSG}" >/dev/null; do
+    # Also wait for the Proxy to be registered into the hub
+    while ! curl -sSL "http://localhost:4444/grid/console" 2>&1 \
+            | grep "BrowserStackRemoteProxy" 2>&1 >/dev/null; do
         echo -n '.'
         sleep 0.2
     done
@@ -120,16 +125,14 @@ WaitTestingBotProxy()
 {
     # Wait for the testingbot node success
     while ! curl -sSL "http://localhost:30003/wd/hub/status" 2>&1 \
-            | jq -r '.state' 2>&1 | grep "success" >/dev/null; do
+            | jq -r '.status' 2>&1 | grep "0" >/dev/null; do
         echo -n '.'
         sleep 0.2
     done
 
-    # Also wait for the testingbot url though this is optional
-    DONE_MSG="hub.testingbot.com"
-    # Using the ZALENIUM_CONTAINER_NAME environment variable here because this method is exported and does not
-    # see the variables declared at the beginning
-    while ! docker logs ${ZALENIUM_CONTAINER_NAME} | grep "${DONE_MSG}" >/dev/null; do
+    # Also wait for the Proxy to be registered into the hub
+    while ! curl -sSL "http://localhost:4444/grid/console" 2>&1 \
+            | grep "TestingBotRemoteProxy" 2>&1 >/dev/null; do
         echo -n '.'
         sleep 0.2
     done
@@ -140,14 +143,15 @@ WaitForVideosTransferred() {
     local __amount_of_tests_with_video=$(jq .executedTestsWithVideo /home/seluser/videos/executedTestsInfo.json)
 
     if [ ${__amount_of_tests_with_video} -gt 0 ]; then
-        local __amount_of_mp4_files=$(ls -1q /home/seluser/videos/*.mp4 | wc -l)
+        local __amount_of_mp4_files=$(find /home/seluser/videos/ -name '*.mp4' | wc -l)
         while [ "${__amount_of_mp4_files}" -lt "${__amount_of_tests_with_video}" ]; do
             log "Waiting for ${__amount_of_mp4_files} mp4 files to be a total of ${__amount_of_tests_with_video}..."
             sleep 4
 
             # Also check if there are mkv, this would mean that
             # docker-selenium failed to convert them to mp4
-            local __amount_of_mkv_files=$(ls -1q /home/seluser/videos/*.mkv | wc -l)
+            #local __amount_of_mkv_files=$(ls -1q find /home/seluser/videos/ -name '*.mkv' | wc -l)
+            local __amount_of_mkv_files=$(find /home/seluser/videos/ -name '*.mkv' | wc -l)
             if [ ${__amount_of_mkv_files} -gt 0 ]; then
                 for __filename in /home/seluser/videos/*.mkv; do
                     local __new_file_name="$(basename ${__filename} .mkv).mp4"
@@ -217,8 +221,12 @@ DockerTerminate()
         # else we pick it from the random ID generated by each docker installation, not related to the user nor the machine
         if [[ $BUILD_URL == *"zalan.do"* ]]; then
             RANDOM_USER_GA_ID=$(echo $BUILD_URL | cut -d'/' -f 3 | cut -d'.' -f 1)
+        elif [[ $CDP_TARGET_REPOSITORY == *"github.com"* ]] || [[ $CDP_TARGET_REPOSITORY == *"github.bus.zalan.do"* ]]; then
+            RANDOM_USER_GA_ID=$(echo $CDP_TARGET_REPOSITORY | cut -d'/' -f 2)
+        elif [[ $KUBERNETES_ENABLED == "true" ]]; then
+            RANDOM_USER_GA_ID=k8s-$(echo -n $HOSTNAME$KUBERNETES_SERVICE_HOST | md5sum)
         else
-            RANDOM_USER_GA_ID=$(docker info 2>&1 | grep -Po '(?<=^ID: )(\w{4}:.+)')
+            RANDOM_USER_GA_ID=docker-$(docker info 2>&1 | grep -Po '(?<=^ID: )(\w{4}:.+)')
         fi
 
         # Gathering the options used to start Zalenium, in order to learn about the used options
@@ -255,17 +263,19 @@ trap DockerTerminate SIGTERM SIGINT SIGKILL
 
 StartUp()
 {
-    EnsureDockerWorks
-    CONTAINER_ID=$(grep docker /proc/self/cgroup | grep -o -E '[0-9a-f]{64}$' | head -n 1)
-    CONTAINER_NAME=$(docker inspect ${CONTAINER_ID} | jq -r '.[0].Name' | sed 's/\///g')
-    CONTAINER_LIVE_PREVIEW_PORT=$(docker inspect ${CONTAINER_ID} | jq -r '.[0].NetworkSettings.Ports."5555/tcp"' | jq -r '.[0].HostPort')
-    EnsureCleanEnv
+    if [ ${KUBERNETES_ENABLED} == "false" ]; then
+        EnsureDockerWorks
+        CONTAINER_ID=$(grep docker /proc/self/cgroup | head -n 1 | grep -o -E '[0-9a-f]{64}' | tail -n 1)
+        CONTAINER_NAME=$(docker inspect ${CONTAINER_ID} | jq -r '.[0].Name' | sed 's/\///g')
+        EnsureCleanEnv
 
-    log "Ensuring docker-selenium is available..."
-    DOCKER_SELENIUM_IMAGE_COUNT=$(docker images | grep "elgalu/selenium" | wc -l)
-    if [ ${DOCKER_SELENIUM_IMAGE_COUNT} -eq 0 ]; then
-        echo "Seems that docker-selenium's image has not been downloaded yet, please run 'docker pull elgalu/selenium' first"
-        exit 1
+        log "Ensuring docker-selenium is available..."
+        DOCKER_SELENIUM_IMAGE_COUNT=$(docker images ${SELENIUM_IMAGE_NAME} --quiet | wc -l)
+        if [ ${DOCKER_SELENIUM_IMAGE_COUNT} -eq 0 ]; then
+            echo "Seems that docker-selenium's image has not been pulled yet"
+            echo "Please run 'docker pull elgalu/selenium', or use your own compatible image via --seleniumImageName"
+            exit 1
+        fi
     fi
 
     log "Running additional checks..."
@@ -339,24 +349,31 @@ StartUp()
         fi
     fi
 
-    export ZALENIUM_CHROME_CONTAINERS=${CHROME_CONTAINERS}
-    export ZALENIUM_FIREFOX_CONTAINERS=${FIREFOX_CONTAINERS}
+    if [ "$DEPRECATED_PARAMETERS" = true ]; then
+        DESIRED_CONTAINERS=$((CHROME_CONTAINERS + FIREFOX_CONTAINERS))
+    fi
+    export ZALENIUM_DESIRED_CONTAINERS=${DESIRED_CONTAINERS}
     export ZALENIUM_MAX_DOCKER_SELENIUM_CONTAINERS=${MAX_DOCKER_SELENIUM_CONTAINERS}
     export ZALENIUM_VIDEO_RECORDING_ENABLED=${VIDEO_RECORDING_ENABLED}
     export ZALENIUM_TZ=${TZ}
     export ZALENIUM_SCREEN_WIDTH=${SCREEN_WIDTH}
     export ZALENIUM_SCREEN_HEIGHT=${SCREEN_HEIGHT}
     export ZALENIUM_CONTAINER_NAME=${CONTAINER_NAME}
-    export ZALENIUM_CONTAINER_LIVE_PREVIEW_PORT=${CONTAINER_LIVE_PREVIEW_PORT}
+    export ZALENIUM_SELENIUM_IMAGE_NAME=${SELENIUM_IMAGE_NAME}
+    export ZALENIUM_MAX_TEST_SESSIONS=${MAX_TEST_SESSIONS}
+    export ZALENIUM_KEEP_ONLY_FAILED_TESTS=${KEEP_ONLY_FAILED_TESTS}
 
     # Random ID used for Google Analytics
     # If it is running inside the Zalando Jenkins env, we pick the team name from the $BUILD_URL
     # else we pick it from the random ID generated by each docker installation, not related to the user nor the machine
-    docker info >docker_info.txt 2>&1
     if [[ $BUILD_URL == *"zalan.do"* ]]; then
         RANDOM_USER_GA_ID=$(echo $BUILD_URL | cut -d'/' -f 3 | cut -d'.' -f 1)
+    elif [[ $CDP_TARGET_REPOSITORY == *"github.com"* ]] || [[ $CDP_TARGET_REPOSITORY == *"github.bus.zalan.do"* ]]; then
+        RANDOM_USER_GA_ID=$(echo $CDP_TARGET_REPOSITORY | cut -d'/' -f 2)
+    elif [[ $KUBERNETES_ENABLED == "true" ]]; then
+        RANDOM_USER_GA_ID=k8s-$(echo -n $HOSTNAME$KUBERNETES_SERVICE_HOST | md5sum)
     else
-        RANDOM_USER_GA_ID=$(grep -Po '(?<=^ID: )(\w{4}:.+)' docker_info.txt)
+        RANDOM_USER_GA_ID=docker-$(docker info 2>&1 | grep -Po '(?<=^ID: )(\w{4}:.+)')
     fi
 
     export ZALENIUM_GA_API_VERSION=${GA_API_VERSION}
@@ -372,12 +389,23 @@ StartUp()
     # to generate the /dev/random seed
     #==============================================
     # See: SeleniumHQ/docker-selenium/issues/14
-    sudo haveged
+    if [ "${WE_HAVE_SUDO_ACCESS}" == "true" ]; then
+      # We found that, for better entropy, running haveged
+      # with --privileged and sudo here works more reliable
+      sudo -E haveged
+    else
+      haveged
+    fi
 
     echo "Copying files for Dashboard..."
     cp /home/seluser/index.html /home/seluser/videos/index.html
     cp -r /home/seluser/css /home/seluser/videos
     cp -r /home/seluser/js /home/seluser/videos
+
+    if [ ! -z ${GRID_USER} ] && [ ! -z ${GRID_PASSWORD} ]; then
+        echo "Enabling basic auth via startup script..."
+        htpasswd -bc /home/seluser/.htpasswd ${GRID_USER} ${GRID_PASSWORD}
+    fi
 
     echo "Starting Nginx reverse proxy..."
     nginx
@@ -386,12 +414,22 @@ StartUp()
 
     mkdir -p logs
 
-    java -cp ${SELENIUM_ARTIFACT}:${ZALENIUM_ARTIFACT} org.openqa.grid.selenium.GridLauncherV3 \
+    DEBUG_MODE=info
+    if [ "$DEBUG_ENABLED" = true ]; then
+        DEBUG_MODE=fine
+        DEBUG_FLAG=-debug
+    fi
+
+    java ${ZALENIUM_EXTRA_JVM_PARAMS} -Djava.util.logging.config.file=logging_${DEBUG_MODE}.properties \
+    -Dlogback.configurationFile=logback.xml \
+    -cp ${SELENIUM_ARTIFACT}:${ZALENIUM_ARTIFACT} org.openqa.grid.selenium.GridLauncherV3 \
     -role hub -port 4445 -servlet de.zalando.ep.zalenium.servlet.LivePreviewServlet \
     -servlet de.zalando.ep.zalenium.servlet.ZaleniumConsoleServlet \
     -servlet de.zalando.ep.zalenium.servlet.ZaleniumResourceServlet \
     -servlet de.zalando.ep.zalenium.dashboard.DashboardCleanupServlet \
-    -debug ${DEBUG_ENABLED} > logs/stdout.zalenium.hub.log &
+    -servlet de.zalando.ep.zalenium.servlet.VncAuthenticationServlet \
+    ${DEBUG_FLAG} &
+
     echo $! > ${PID_PATH_SELENIUM}
 
     if ! timeout --foreground "1m" bash -c WaitSeleniumHub; then
@@ -403,18 +441,20 @@ StartUp()
 
     echo "Starting DockerSeleniumStarter node..."
 
-    java -jar ${SELENIUM_ARTIFACT} -role node -hub http://localhost:4444/grid/register \
-     -proxy de.zalando.ep.zalenium.proxy.DockerSeleniumStarterRemoteProxy \
-     -port 30000 -debug ${DEBUG_ENABLED} > logs/stdout.zalenium.docker.node.log &
+    java -Djava.util.logging.config.file=logging_${DEBUG_MODE}.properties \
+     -jar ${SELENIUM_ARTIFACT} -role node -hub http://localhost:4444/grid/register \
+     -registerCycle 0 -proxy de.zalando.ep.zalenium.proxy.DockerSeleniumStarterRemoteProxy \
+     -nodePolling 90000 -port 30000 ${DEBUG_FLAG} &
     echo $! > ${PID_PATH_DOCKER_SELENIUM_NODE}
 
-    if ! timeout --foreground "30s" bash -c WaitStarterProxy; then
-        echo "StarterRemoteProxy failed to start after 30 seconds, failing..."
+    if ! timeout --foreground "${OVERRIDE_WAIT_TIME:-30s}" bash -c WaitStarterProxy; then
+        echo "StarterRemoteProxy failed to start after ${OVERRIDE_WAIT_TIME:-30s} seconds, failing..."
+        curl "http://localhost:30000/wd/hub/status"
         exit 12
     fi
 
-    if ! timeout --foreground "30s" bash -c WaitStarterProxyToRegister; then
-        echo "StarterRemoteProxy failed to register to the hub after 30 seconds, failing..."
+    if ! timeout --foreground "${OVERRIDE_WAIT_TIME:-30s}" bash -c WaitStarterProxyToRegister; then
+        echo "StarterRemoteProxy failed to register to the hub after ${OVERRIDE_WAIT_TIME:-30s} seconds, failing..."
         exit 13
     fi
     echo "DockerSeleniumStarter node started!"
@@ -424,16 +464,12 @@ StartUp()
         exit 7
     fi
 
-    if ! curl -sSL "http://localhost:5555/proxy/4444/" | grep Grid >/dev/null; then
-        echo "Error: Nginx is not redirecting to the grid"
-        exit 8
-    fi
-
     if [ "$SAUCE_LABS_ENABLED" = true ]; then
         echo "Starting Sauce Labs node..."
-        java -jar ${SELENIUM_ARTIFACT} -role node -hub http://localhost:4444/grid/register \
-         -proxy de.zalando.ep.zalenium.proxy.SauceLabsRemoteProxy \
-         -port 30001 -debug ${DEBUG_ENABLED} > logs/stdout.zalenium.sauce.node.log &
+        java -Djava.util.logging.config.file=logging_${DEBUG_MODE}.properties \
+         -jar ${SELENIUM_ARTIFACT} -role node -hub http://localhost:4444/grid/register \
+         -registerCycle 0 -proxy de.zalando.ep.zalenium.proxy.SauceLabsRemoteProxy \
+         -nodePolling 90000 -port 30001 ${DEBUG_FLAG} &
         echo $! > ${PID_PATH_SAUCE_LABS_NODE}
 
         if ! timeout --foreground "40s" bash -c WaitSauceLabsProxy; then
@@ -457,9 +493,10 @@ StartUp()
 
     if [ "$BROWSER_STACK_ENABLED" = true ]; then
         echo "Starting Browser Stack node..."
-        java -jar ${SELENIUM_ARTIFACT} -role node -hub http://localhost:4444/grid/register \
-         -proxy de.zalando.ep.zalenium.proxy.BrowserStackRemoteProxy \
-         -port 30002 -debug ${DEBUG_ENABLED} > logs/stdout.zalenium.browserstack.node.log &
+        java -Djava.util.logging.config.file=logging_${DEBUG_MODE}.properties \
+         -jar ${SELENIUM_ARTIFACT} -role node -hub http://localhost:4444/grid/register \
+         -registerCycle 0 -proxy de.zalando.ep.zalenium.proxy.BrowserStackRemoteProxy \
+         -nodePolling 90000 -port 30002 ${DEBUG_FLAG} &
         echo $! > ${PID_PATH_BROWSER_STACK_NODE}
 
         if ! timeout --foreground "40s" bash -c WaitBrowserStackProxy; then
@@ -482,9 +519,10 @@ StartUp()
 
     if [ "$TESTINGBOT_ENABLED" = true ]; then
         echo "Starting TestingBot node..."
-        java -jar ${SELENIUM_ARTIFACT} -role node -hub http://localhost:4444/grid/register \
-         -proxy de.zalando.ep.zalenium.proxy.TestingBotRemoteProxy \
-         -port 30003 -debug ${DEBUG_ENABLED} > logs/stdout.zalenium.testingbot.node.log &
+        java -Djava.util.logging.config.file=logging_${DEBUG_MODE}.properties \
+         -jar ${SELENIUM_ARTIFACT} -role node -hub http://localhost:4444/grid/register \
+         -registerCycle 0 -proxy de.zalando.ep.zalenium.proxy.TestingBotRemoteProxy \
+         -nodePolling 90000 -port 30003 ${DEBUG_FLAG} &
         echo $! > ${PID_PATH_TESTINGBOT_NODE}
 
         if ! timeout --foreground "40s" bash -c WaitTestingBotProxy; then
@@ -508,25 +546,39 @@ StartUp()
     echo "Zalenium is now ready!"
 
     if [ "$SEND_ANONYMOUS_USAGE_INFO" = true ]; then
-        DisplayDataProcessingAgreement
-        docker info >docker_info.txt 2>&1
 
-        # Random ID generated by each docker installation, not related to the user nor the machine
-        DOCKER_CLIENT_VERSION=$(docker -v)
-        DOCKER_SERVER_VERSION=$(grep -Po '(?<=^Server Version: )(\d{1,2}.+)' docker_info.txt)
-        KERNEL_VERSION=$(grep -Po '(?<=^Kernel Version: )(\d{1,2}.+)' docker_info.txt)
-        OPERATING_SYSTEM=$(grep -Po '(?<=^Operating System: )(\w{1,2}.+)' docker_info.txt)
-        OS_TYPE=$(grep -Po '(?<=^OSType: )(\w{1,2}.+)' docker_info.txt)
-        ARCHITECTURE=$(grep -Po '(?<=^Architecture: )(\w{1,2}.+)' docker_info.txt)
-        CPU_NUMBER=$(grep -Po '(?<=^CPUs: )(\d{1,2})' docker_info.txt)
-        TOTAL_MEMORY=$(grep -Po '(?<=^Total Memory: )(\w{1,2}.+)(?<= )' docker_info.txt)
+        DisplayDataProcessingAgreement
+        if [ ${KUBERNETES_ENABLED} == "false" ]; then
+            docker info >docker_info.txt 2>&1
+
+            # Random ID generated by each docker installation, not related to the user nor the machine
+            DOCKER_CLIENT_VERSION=$(docker -v)
+            DOCKER_SERVER_VERSION=$(grep -Po '(?<=^Server Version: )(\d{1,2}.+)' docker_info.txt)
+            KERNEL_VERSION=$(grep -Po '(?<=^Kernel Version: )(\d{1,2}.+)' docker_info.txt)
+            OPERATING_SYSTEM=$(grep -Po '(?<=^Operating System: )(\w{1,2}.+)' docker_info.txt)
+            OS_TYPE=$(grep -Po '(?<=^OSType: )(\w{1,2}.+)' docker_info.txt)
+            ARCHITECTURE=$(grep -Po '(?<=^Architecture: )(\w{1,2}.+)' docker_info.txt)
+            CPU_NUMBER=$(grep -Po '(?<=^CPUs: )(\d{1,2})' docker_info.txt)
+            TOTAL_MEMORY=$(grep -Po '(?<=^Total Memory: )(\w{1,2}.+)(?<= )' docker_info.txt)
+        else
+            # We just log that Kubernetes is being used
+            DOCKER_CLIENT_VERSION=Kubernetes
+            DOCKER_SERVER_VERSION=Kubernetes
+            KERNEL_VERSION=0.0
+            OPERATING_SYSTEM=Kubernetes
+            OS_TYPE=Kubernetes
+            ARCHITECTURE=x86_64
+            CPU_NUMBER=0
+            TOTAL_MEMORY=0.0
+        fi
 
         # Gathering the options used to start Zalenium, in order to learn about the used options
-        ZALENIUM_START_COMMAND="zalenium.sh --chromeContainers $CHROME_CONTAINERS --firefoxContainers
-            $FIREFOX_CONTAINERS --maxDockerSeleniumContainers $MAX_DOCKER_SELENIUM_CONTAINERS
-            --sauceLabsEnabled $SAUCE_LABS_ENABLED --browserStackEnabled $BROWSER_STACK_ENABLED
-            --testingBotEnabled $TESTINGBOT_ENABLED --videoRecordingEnabled $VIDEO_RECORDING_ENABLED
-            --screenWidth $SCREEN_WIDTH --screenHeight $SCREEN_HEIGHT --timeZone $TZ"
+        ZALENIUM_START_COMMAND="zalenium.sh --deprecatedParameters $DEPRECATED_PARAMETERS
+            --desiredContainers $DESIRED_CONTAINERS --maxDockerSeleniumContainers $MAX_DOCKER_SELENIUM_CONTAINERS
+            --maxTestSessions $MAX_TEST_SESSIONS --sauceLabsEnabled $SAUCE_LABS_ENABLED
+            --browserStackEnabled $BROWSER_STACK_ENABLED --testingBotEnabled $TESTINGBOT_ENABLED
+            --videoRecordingEnabled $VIDEO_RECORDING_ENABLED --screenWidth $SCREEN_WIDTH --screenHeight $SCREEN_HEIGHT
+            --timeZone $TZ"
 
         local args=(
             --max-time 10
@@ -649,7 +701,7 @@ ShutDown()
     if [ -f /home/seluser/videos/executedTestsInfo.json ]; then
         # Wait for the dashboard and the videos, if applies
         if timeout --foreground "40s" bash -c WaitForVideosTransferred; then
-            local __total="$(</home/seluser/videos/executedTestsInfo.json | jq .executedTestsWithVideo)"
+            local __total=$(jq .executedTestsWithVideo /home/seluser/videos/executedTestsInfo.json)
             log "WaitForVideosTransferred succeeded for a total of ${__total}"
         else
             log "WaitForVideosTransferred failed after 40 seconds!"
@@ -682,7 +734,9 @@ ShutDown()
         fi
     fi
 
-    EnsureCleanEnv
+    if [ ${KUBERNETES_ENABLED} == "false" ]; then
+        EnsureCleanEnv
+    fi
 }
 
 function usage()
@@ -692,29 +746,31 @@ function usage()
     echo "zalenium"
     echo -e "\t -h --help"
     echo -e "\t start <options, see below>"
-    echo -e "\t --chromeContainers -> Number of Chrome containers created on startup. Default is 1 when parameter is absent."
-    echo -e "\t --firefoxContainers -> Number of Firefox containers created on startup. Default is 1 when parameter is absent."
-    echo -e "\t --maxDockerSeleniumContainers -> Max number of docker-selenium containers running at the same time. Default is 10 when parameter is absent."
-    echo -e "\t --sauceLabsEnabled -> Determines if the Sauce Labs node is started. Defaults to 'false' when parameter absent."
-    echo -e "\t --browserStackEnabled -> Determines if the Browser Stack node is started. Defaults to 'false' when parameter absent."
-    echo -e "\t --testingBotEnabled -> Determines if the TestingBot node is started. Defaults to 'false' when parameter absent."
+    echo -e "\t --desiredContainers -> Number of nodes/containers created on startup. Default is 2."
+    echo -e "\t --maxDockerSeleniumContainers -> Max number of docker-selenium containers running at the same time. Default is 10."
+    echo -e "\t --sauceLabsEnabled -> Determines if the Sauce Labs node is started. Defaults to 'false'."
+    echo -e "\t --browserStackEnabled -> Determines if the Browser Stack node is started. Defaults to 'false'."
+    echo -e "\t --testingBotEnabled -> Determines if the TestingBot node is started. Defaults to 'false'."
     echo -e "\t --startTunnel -> When using a cloud testing platform is enabled, starts the tunnel to allow local testing. Defaults to 'false'."
-    echo -e "\t --videoRecordingEnabled -> Sets if video is recorded in every test. Defaults to 'true' when parameter absent."
+    echo -e "\t --videoRecordingEnabled -> Sets if video is recorded in every test. Defaults to 'true'."
     echo -e "\t --screenWidth -> Sets the screen width. Defaults to 1900"
     echo -e "\t --screenHeight -> Sets the screen height. Defaults to 1880"
     echo -e "\t --timeZone -> Sets the time zone in the containers. Defaults to \"Europe/Berlin\""
     echo -e "\t --sendAnonymousUsageInfo -> Collects anonymous usage of the tool. Defaults to 'true'"
     echo -e "\t --debugEnabled -> enables LogLevel.FINE. Defaults to 'false'"
+    echo -e "\t --seleniumImageName -> enables overriding of the Docker selenium image to use. Defaults to \"elgalu/selenium\""
+    echo -e "\t --gridUser -> allows you to specify a user to enable basic auth protection, --gridPassword must be provided also."
+    echo -e "\t --gridPassword -> allows you to specify a password to enable basic auth protection, --gridUser must be provided also."
+    echo -e "\t --maxTestSessions -> max amount of tests executed per container, defaults to '1'."
+    echo -e "\t --keepOnlyFailedTests -> Keeps only videos of failed tests (you need to send a cookie). Defaults to 'false'"
     echo ""
     echo -e "\t stop"
     echo ""
     echo -e "\t Examples:"
-    echo -e "\t - Starting Zalenium with 2 Chrome containers and with Sauce Labs"
-    echo -e "\t start --chromeContainers 2 --sauceLabsEnabled true"
-    echo -e "\t - Starting Zalenium with 2 Firefox containers and with BrowserStack"
-    echo -e "\t start --chromeContainers 2 --browserStackEnabled true"
-    echo -e "\t - Starting Zalenium with 2 Firefox containers and with TestingBot"
-    echo -e "\t start --chromeContainers 2 --testingBotEnabled true"
+    echo -e "\t - Starting Zalenium with 2 containers and with Sauce Labs"
+    echo -e "\t start --desiredContainers 2 --sauceLabsEnabled true"
+    echo -e "\t - Starting Zalenium with 2 containers and with BrowserStack"
+    echo -e "\t start --desiredContainers 2 --browserStackEnabled true"
     echo -e "\t - Starting Zalenium screen width 1440 and height 810, time zone \"America/Montreal\""
     echo -e "\t start --screenWidth 1440 --screenHeight 810 --timeZone \"America/Montreal\""
 }
@@ -738,10 +794,15 @@ case ${SCRIPT_ACTION} in
                     exit
                     ;;
                 --chromeContainers)
+                    DEPRECATED_PARAMETERS=true
                     CHROME_CONTAINERS=${VALUE}
                     ;;
                 --firefoxContainers)
+                    DEPRECATED_PARAMETERS=true
                     FIREFOX_CONTAINERS=${VALUE}
+                    ;;
+                --desiredContainers)
+                    DESIRED_CONTAINERS=${VALUE}
                     ;;
                 --maxDockerSeleniumContainers)
                     MAX_DOCKER_SELENIUM_CONTAINERS=${VALUE}
@@ -775,6 +836,21 @@ case ${SCRIPT_ACTION} in
                     ;;
                 --debugEnabled)
                     DEBUG_ENABLED=${VALUE}
+                    ;;
+                --seleniumImageName)
+                    SELENIUM_IMAGE_NAME=${VALUE}
+                    ;;
+                --gridUser)
+                    GRID_USER=${VALUE}
+                    ;;
+                --gridPassword)
+                    GRID_PASSWORD=${VALUE}
+                    ;;
+                --maxTestSessions)
+                    MAX_TEST_SESSIONS=${VALUE}
+                    ;;
+                --keepOnlyFailedTests)
+                    KEEP_ONLY_FAILED_TESTS=${VALUE}
                     ;;
                 *)
                     echo "ERROR: unknown parameter \"$PARAM\""

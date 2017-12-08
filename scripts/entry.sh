@@ -3,13 +3,56 @@
 # set -e: exit asap if a command exits with a non-zero status
 set -e
 
-# /usr/bin/docker exists when docker run has
-#   -v $(which docker):/usr/bin/docker
-if [ -f /usr/bin/docker ]; then
+echoerr() { printf "%s\n" "$*" >&2; }
+
+# print error and exit
+die () {
+  echoerr "ERROR: $1"
+  # if $2 is defined AND NOT EMPTY, use $2; otherwise, set to "150"
+  errnum=${2-188}
+  exit $errnum
+}
+
+#==============================================
+# OpenShift or non-sudo environments support
+#==============================================
+
+CURRENT_UID="$(id -u)"
+CURRENT_GID="$(id -g)"
+
+# Ensure that assigned uid has entry in /etc/passwd.
+if ! whoami &> /dev/null; then
+  echo "extrauser:x:${CURRENT_UID}:0::/home/extrauser:/bin/bash" >> /etc/passwd
+fi
+
+# Flag to know if we have sudo access
+if sudo pwd >/dev/null 2>&1; then
+  export WE_HAVE_SUDO_ACCESS="true"
+else
+  export WE_HAVE_SUDO_ACCESS="false"
+  warn "We don't have sudo"
+fi
+
+if [ ${CURRENT_GID} -ne 1000 ]; then
+  if [ "${WE_HAVE_SUDO_ACCESS}" == "true" ]; then
+    sudo groupadd --gid ${CURRENT_GID} selgroup
+    sudo gpasswd -a $(whoami) selgroup
+  fi
+fi
+
+#===================================================================
+# K8s, vs shared -v /usr/bin/docker vs figure out the Docker version
+#===================================================================
+
+USE_KUBERNETES=false
+if [ -f /var/run/secrets/kubernetes.io/serviceaccount/token ]; then
+    echo "Kubernetes service account found."
+    USE_KUBERNETES=true
+elif [ -f /usr/bin/docker ]; then
     echo "Docker binary already present, will use that one."
 else
     # Grab the complete docker version `1.12.5` out of the partial one `1.12`
-    export DOCKER_VERSION=$(ls /usr/bin/docker-${DOCKER}* | grep -Po '(?<=docker-)([a-z0-9\.]+)' | head -1)
+    export DOCKER_VERSION=$(ls /usr/bin/docker-${DOCKER}* | grep -Po '(?<=docker-)([a-z0-9\.-]+)' | head -1)
     # Link the docker binary to the selected docker version via e.g. `-e DOCKER=1.11`
     if [ -f /usr/bin/docker-${DOCKER_VERSION} ]; then
         sudo ln -s /usr/bin/docker-${DOCKER_VERSION} /usr/bin/docker
@@ -29,6 +72,10 @@ else
 fi
 
 __run_with_gosu="false"
+
+#============================================================
+# Spaghetti conditionals to handle a variety of environments
+#============================================================
 
 # If this was docker run with: -e HOST_GID="$(id -g)" -e HOST_UID="$(id -u)"
 if [ "${HOST_UID}" != "" ] && [ "${HOST_GID}" != "" ]; then
@@ -74,15 +121,20 @@ if [ "${HOST_UID}" != "" ] && [ "${HOST_GID}" != "" ]; then
 fi
 
 if [ "${__run_with_gosu}" == "true" ]; then
-    exec gosu seluser ./zalenium.sh "$@"
+    # We still need gosu when accessing the docker.sock
+    exec sudo --preserve-env gosu seluser ./zalenium.sh "$@"
 else
     # We will need sudo to run docker alongside docker
     # because we don't have the matching group and user id (*nix)
-
-    # Make sure Docker works (with sudo) before continuing
-    docker --version
-    sudo docker images elgalu/selenium >/dev/null
-
-    # Replace the current process with zalenium.sh
-    exec sudo --preserve-env ./zalenium.sh "$@"
+    if [ "${USE_KUBERNETES}" == "false" ]; then
+        # Make sure Docker works (with sudo) before continuing
+        docker --version
+        sudo docker images elgalu/selenium >/dev/null
+        # Replace the current process with zalenium.sh
+        exec sudo --preserve-env ./zalenium.sh "$@"
+    else
+        # Removing the 'sudo' in Kubernetes
+        # Replace the current process with zalenium.sh
+        exec ./zalenium.sh "$@"
+    fi
 fi

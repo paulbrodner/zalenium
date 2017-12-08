@@ -5,7 +5,8 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import de.zalando.ep.zalenium.dashboard.TestInformation;
 import org.openqa.grid.common.RegistrationRequest;
-import org.openqa.grid.internal.Registry;
+import org.openqa.grid.internal.GridRegistry;
+import org.openqa.selenium.remote.server.jmx.ManagedService;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -15,6 +16,7 @@ import java.util.logging.Logger;
 /*
     This class should work in a similar way as its sibling, SauceLabsRemoteProxy
  */
+@ManagedService(description = "TestingBot TestSlots")
 public class TestingBotRemoteProxy extends CloudTestingRemoteProxy {
 
     private static final String TESTINGBOT_URL = "http://hub.testingbot.com:80";
@@ -24,7 +26,7 @@ public class TestingBotRemoteProxy extends CloudTestingRemoteProxy {
     private static final Logger logger = Logger.getLogger(TestingBotRemoteProxy.class.getName());
     private static final String TESTINGBOT_PROXY_NAME = "TestingBot";
 
-    public TestingBotRemoteProxy(RegistrationRequest request, Registry registry) {
+    public TestingBotRemoteProxy(RegistrationRequest request, GridRegistry registry) {
         super(updateTBCapabilities(request, TESTINGBOT_ACCOUNT_INFO), registry);
     }
 
@@ -96,8 +98,18 @@ public class TestingBotRemoteProxy extends CloudTestingRemoteProxy {
             String platform = testData.get("os").getAsString();
             String videoUrl = testData.get("video").getAsString();
             List<String> logUrls = new ArrayList<>();
-            testInformation = new TestInformation(seleniumSessionId, testName, getProxyName(), browser, browserVersion,
-                    platform, "", getVideoFileExtension(), videoUrl, logUrls);
+            testInformation = new TestInformation.TestInformationBuilder()
+                    .withSeleniumSessionId(seleniumSessionId)
+                    .withTestName(testName)
+                    .withProxyName(getProxyName())
+                    .withBrowser(browser)
+                    .withBrowserVersion(browserVersion)
+                    .withPlatform(platform)
+                    .withTestStatus(TestInformation.TestStatus.COMPLETED)
+                    .withFileExtension(getVideoFileExtension())
+                    .withVideoUrl(videoUrl)
+                    .withLogUrls(logUrls)
+                    .build();
             // Sometimes the video URL is not ready right away, so we need to wait a bit and fetch again.
             if (videoUrl.startsWith("http")) {
                 return testInformation;

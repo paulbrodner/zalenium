@@ -1,25 +1,28 @@
 package de.zalando.ep.zalenium.container;
 
 import java.io.InputStream;
-import java.util.List;
+import java.net.URL;
+import java.util.Map;
 
 public interface ContainerClient {
-
+    
     void setNodeId(String nodeId);
 
-    String getContainerId(String containerName);
+    ContainerClientRegistration registerNode(String zaleniumContainerName, URL remoteHost);
 
     InputStream copyFiles(String containerId, String folderName);
 
     void stopContainer(String containerId);
 
-    void executeCommand(String containerId, String[] command);
+    void executeCommand(String containerId, String[] command, boolean waitForExecution);
 
     String getLatestDownloadedImage(String imageName);
 
-    String getLabelValue(String image, String label);
-
     int getRunningContainers(String image);
 
-    void createContainer(String zaleniumContainerName, String containerName, String image, List<String> envVars);
+    ContainerCreationStatus createContainer(String zaleniumContainerName, String image, Map<String, String> envVars, String nodePort);
+
+    void initialiseContainerEnvironment();
+
+    String getContainerIp(String containerName);
 }

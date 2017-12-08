@@ -5,7 +5,8 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import de.zalando.ep.zalenium.dashboard.TestInformation;
 import org.openqa.grid.common.RegistrationRequest;
-import org.openqa.grid.internal.Registry;
+import org.openqa.grid.internal.GridRegistry;
+import org.openqa.selenium.remote.server.jmx.ManagedService;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -15,6 +16,7 @@ import java.util.logging.Logger;
 /*
     This class should work in a similar way as its sibling, SauceLabsRemoteProxy
  */
+@ManagedService(description = "BrowserStack TestSlots")
 public class BrowserStackRemoteProxy extends CloudTestingRemoteProxy {
 
     private static final String BROWSER_STACK_URL = "http://hub-cloud.browserstack.com:80";
@@ -24,7 +26,7 @@ public class BrowserStackRemoteProxy extends CloudTestingRemoteProxy {
     private static final String BROWSER_STACK_KEY = getEnv().getStringEnvVariable("BROWSER_STACK_KEY", "");
     private static final String BROWSER_STACK_PROXY_NAME = "BrowserStack";
 
-    public BrowserStackRemoteProxy(RegistrationRequest request, Registry registry) {
+    public BrowserStackRemoteProxy(RegistrationRequest request, GridRegistry registry) {
         super(updateBSCapabilities(request, BROWSER_STACK_ACCOUNT_INFO), registry);
     }
 
@@ -91,8 +93,19 @@ public class BrowserStackRemoteProxy extends CloudTestingRemoteProxy {
         String platformVersion = automation_session.get("os_version").getAsString();
         String videoUrl = automation_session.get("video_url").getAsString();
         List<String> logUrls = new ArrayList<>();
-        return new TestInformation(seleniumSessionId, testName, getProxyName(), browser, browserVersion, platform,
-                platformVersion, getVideoFileExtension(), videoUrl, logUrls);
+        return new TestInformation.TestInformationBuilder()
+                .withSeleniumSessionId(seleniumSessionId)
+                .withTestName(testName)
+                .withProxyName(getProxyName())
+                .withBrowser(browser)
+                .withBrowserVersion(browserVersion)
+                .withPlatform(platform)
+                .withTestStatus(TestInformation.TestStatus.COMPLETED)
+                .withPlatformVersion(platformVersion)
+                .withFileExtension(getVideoFileExtension())
+                .withVideoUrl(videoUrl)
+                .withLogUrls(logUrls)
+                .build();
     }
 
     @Override

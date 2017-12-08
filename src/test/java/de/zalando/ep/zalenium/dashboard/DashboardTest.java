@@ -20,14 +20,22 @@ public class DashboardTest {
 
     private static final String TEST_COUNT_FILE_NAME = "executedTestsInfo.json";
 
-    private TestInformation ti = new TestInformation("seleniumSessionId", "testName", "proxyName", "browser",
-            "browserVersion", "platform");
+    private TestInformation ti = new TestInformation.TestInformationBuilder()
+            .withSeleniumSessionId("seleniumSessionId")
+            .withTestName("testName")
+            .withProxyName("proxyName")
+            .withBrowser("browser")
+            .withBrowserVersion("browserVersion")
+            .withPlatform("platform")
+            .withTestStatus(TestInformation.TestStatus.COMPLETED)
+            .build();
 
     @Rule
     public TemporaryFolder temporaryFolder = new TemporaryFolder();
 
     @Before
     public void initDashboard() throws IOException {
+        ti.setVideoRecorded(true);
         Dashboard.setExecutedTests(0, 0);
         TestUtils.ensureRequiredInputFilesExist(temporaryFolder);
         CommonProxyUtilities proxyUtilities = TestUtils.mockCommonProxyUtilitiesForDashboardTesting(temporaryFolder);
@@ -40,14 +48,14 @@ public class DashboardTest {
     }
 
     @Test
-    public void testCountOne() throws IOException {
+    public void testCountOne() {
         Dashboard.updateDashboard(ti);
         Assert.assertEquals(1, Dashboard.getExecutedTests());
         Assert.assertEquals(1, Dashboard.getExecutedTestsWithVideo());
     }
 
     @Test
-    public void testCountTwo() throws IOException {
+    public void testCountTwo() {
         Dashboard.updateDashboard(ti);
         Dashboard.updateDashboard(ti);
         Assert.assertEquals(2, Dashboard.getExecutedTests());

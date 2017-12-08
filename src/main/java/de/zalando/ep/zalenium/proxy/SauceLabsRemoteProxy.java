@@ -5,10 +5,12 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import de.zalando.ep.zalenium.dashboard.TestInformation;
 import org.openqa.grid.common.RegistrationRequest;
-import org.openqa.grid.internal.Registry;
+import org.openqa.grid.internal.GridRegistry;
+import org.openqa.selenium.remote.server.jmx.ManagedService;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -16,7 +18,7 @@ import java.util.logging.Logger;
     Almost all concepts and ideas for this part of the implementation are taken from the open source project seen here:
     https://github.com/rossrowe/sauce-grid-plugin
  */
-
+@ManagedService(description = "SauceLabs TestSlots")
 public class SauceLabsRemoteProxy extends CloudTestingRemoteProxy {
 
     private static final String SAUCE_LABS_ACCOUNT_INFO = "https://saucelabs.com/rest/v1/users/%s";
@@ -26,7 +28,7 @@ public class SauceLabsRemoteProxy extends CloudTestingRemoteProxy {
     private static final Logger LOGGER = Logger.getLogger(SauceLabsRemoteProxy.class.getName());
     private static final String SAUCE_LABS_PROXY_NAME = "SauceLabs";
 
-    public SauceLabsRemoteProxy(RegistrationRequest request, Registry registry) {
+    public SauceLabsRemoteProxy(RegistrationRequest request, GridRegistry registry) {
         super(updateSLCapabilities(request, String.format(SAUCE_LABS_ACCOUNT_INFO, SAUCE_LABS_USER_NAME)), registry);
     }
 
@@ -112,8 +114,18 @@ public class SauceLabsRemoteProxy extends CloudTestingRemoteProxy {
         List<String> logUrls = new ArrayList<>();
         logUrls.add(sauceLabsBrowserLogUrl);
         logUrls.add(sauceLabsSeleniumLogUrl);
-        return new TestInformation(seleniumSessionId, testName, getProxyName(), browser, browserVersion, platform, "",
-                getVideoFileExtension(), sauceLabsVideoUrl, logUrls);
+        return new TestInformation.TestInformationBuilder()
+                .withSeleniumSessionId(seleniumSessionId)
+                .withTestName(testName)
+                .withProxyName(getProxyName())
+                .withBrowser(browser)
+                .withBrowserVersion(browserVersion)
+                .withPlatform(platform)
+                .withTestStatus(TestInformation.TestStatus.COMPLETED)
+                .withFileExtension(getVideoFileExtension())
+                .withVideoUrl(sauceLabsVideoUrl)
+                .withLogUrls(logUrls)
+                .build();
     }
 
     @Override

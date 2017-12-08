@@ -10,7 +10,7 @@ import com.google.common.io.ByteStreams;
 import de.zalando.ep.zalenium.proxy.DockerSeleniumRemoteProxy;
 import de.zalando.ep.zalenium.servlet.renderer.LiveNodeHtmlRenderer;
 import de.zalando.ep.zalenium.servlet.renderer.TemplateRenderer;
-import org.openqa.grid.internal.Registry;
+import org.openqa.grid.internal.GridRegistry;
 import org.openqa.grid.internal.RemoteProxy;
 import org.openqa.grid.internal.utils.HtmlRenderer;
 import org.openqa.grid.web.servlet.RegistryBasedServlet;
@@ -25,6 +25,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -37,7 +38,7 @@ public class LivePreviewServlet extends RegistryBasedServlet {
         this(null);
     }
 
-    public LivePreviewServlet(Registry registry) {
+    public LivePreviewServlet(GridRegistry registry) {
         super(registry);
     }
 
@@ -67,10 +68,10 @@ public class LivePreviewServlet extends RegistryBasedServlet {
 
 
         int refresh = -1;
-        String testGroup = "";
+        String testBuild = "";
         try {
-            refresh = Integer.parseInt(request.getParameter("refresh"));
-            testGroup = request.getParameter("group") == null ? "" : request.getParameter("group");
+            refresh = request.getParameter("refresh") == null ? -1 : Integer.parseInt(request.getParameter("refresh"));
+            testBuild = request.getParameter("build") == null ? "" : request.getParameter("build");
         } catch (Exception e) {
             LOGGER.log(Level.FINE, e.toString(), e);
         }
@@ -79,9 +80,9 @@ public class LivePreviewServlet extends RegistryBasedServlet {
         for (RemoteProxy proxy : getRegistry().getAllProxies()) {
             if (proxy instanceof DockerSeleniumRemoteProxy) {
                 DockerSeleniumRemoteProxy dockerSeleniumRemoteProxy = (DockerSeleniumRemoteProxy) proxy;
-                HtmlRenderer renderer = new LiveNodeHtmlRenderer(dockerSeleniumRemoteProxy, request.getServerName());
-                // Render the nodes that are part of an specified test group
-                if (testGroup.isEmpty() || testGroup.equalsIgnoreCase(dockerSeleniumRemoteProxy.getTestGroup())) {
+                HtmlRenderer renderer = new LiveNodeHtmlRenderer(dockerSeleniumRemoteProxy);
+                // Render the nodes that are part of an specified test build
+                if (testBuild.isEmpty() || testBuild.equalsIgnoreCase(dockerSeleniumRemoteProxy.getTestBuild())) {
                     nodes.add(renderer.renderSummary());
                 }
             }

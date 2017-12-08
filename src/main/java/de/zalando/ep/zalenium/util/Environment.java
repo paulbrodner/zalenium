@@ -9,8 +9,8 @@ public class Environment {
 
     private final Logger logger = Logger.getLogger(Environment.class.getName());
 
-    private static final String ENV_VAR_IS_NOT_SET = "Env. variable %s value is not set, falling back to default: %s.";
-    private static final String ENV_VAR_IS_NOT_A_VALID_DATA_TYPE = "Env. variable %s is not a valid %s.";
+    private static final String ENV_VAR_IS_NOT_SET = "Env. variable %s value is not set, falling back to default: %s";
+    private static final String ENV_VAR_IS_NOT_A_VALID_DATA_TYPE = "Env. variable %s is not a valid %s";
 
     @VisibleForTesting
     public String getEnvVariable(String envVariableName) {
@@ -22,7 +22,8 @@ public class Environment {
             try {
                 return Integer.parseInt(getEnvVariable(envVariableName));
             } catch (Exception e) {
-                logger.log(Level.WARNING, String.format(ENV_VAR_IS_NOT_A_VALID_DATA_TYPE, envVariableName, "integer"), e);
+                logger.log(Level.WARNING, String.format(ENV_VAR_IS_NOT_A_VALID_DATA_TYPE, envVariableName, "integer"));
+                logger.log(Level.FINE, String.format(ENV_VAR_IS_NOT_A_VALID_DATA_TYPE, envVariableName, "integer"), e);
                 return defaultValue;
             }
         } else {
@@ -36,7 +37,8 @@ public class Environment {
             try {
                 return String.valueOf(getEnvVariable(envVariableName));
             } catch (Exception e) {
-                logger.log(Level.WARNING, String.format(ENV_VAR_IS_NOT_A_VALID_DATA_TYPE, envVariableName, "String"), e);
+                logger.log(Level.WARNING, String.format(ENV_VAR_IS_NOT_A_VALID_DATA_TYPE, envVariableName, "String"));
+                logger.log(Level.FINE, String.format(ENV_VAR_IS_NOT_A_VALID_DATA_TYPE, envVariableName, "String"), e);
                 return defaultValue;
             }
         } else {

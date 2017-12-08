@@ -2,20 +2,33 @@ package de.zalando.ep.zalenium.proxy;
 
 import com.google.gson.JsonElement;
 import de.zalando.ep.zalenium.dashboard.TestInformation;
-import de.zalando.ep.zalenium.util.*;
+import de.zalando.ep.zalenium.util.CommonProxyUtilities;
+import de.zalando.ep.zalenium.util.Environment;
+import de.zalando.ep.zalenium.util.GoogleAnalyticsApi;
+import de.zalando.ep.zalenium.util.TestUtils;
 import org.apache.http.HttpResponse;
 import org.apache.http.client.HttpClient;
 import org.apache.http.client.methods.HttpPost;
 import org.hamcrest.CoreMatchers;
-import org.junit.*;
+import org.junit.After;
+import org.junit.Assert;
+import org.junit.Before;
+import org.junit.Test;
 import org.openqa.grid.common.RegistrationRequest;
-import org.openqa.grid.internal.*;
+import org.openqa.grid.internal.DefaultGridRegistry;
+import org.openqa.grid.internal.ExternalSessionKey;
+import org.openqa.grid.internal.GridRegistry;
+import org.openqa.grid.internal.RemoteProxy;
+import org.openqa.grid.internal.TestSession;
 import org.openqa.grid.web.servlet.handler.RequestType;
 import org.openqa.grid.web.servlet.handler.WebDriverRequest;
 import org.openqa.selenium.Platform;
 import org.openqa.selenium.remote.BrowserType;
 import org.openqa.selenium.remote.CapabilityType;
+import org.openqa.selenium.remote.server.jmx.JMXHelper;
 
+import javax.management.MalformedObjectNameException;
+import javax.management.ObjectName;
 import javax.servlet.ServletOutputStream;
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
@@ -28,12 +41,12 @@ import static org.mockito.Mockito.*;
 public class SauceLabsRemoteProxyTest {
 
     private SauceLabsRemoteProxy sauceLabsProxy;
-    private Registry registry;
+    private GridRegistry registry;
 
 
     @Before
     public void setUp() {
-        registry = Registry.newInstance();
+        registry = DefaultGridRegistry.newInstance();
         // Creating the configuration and the registration request of the proxy (node)
         RegistrationRequest request = TestUtils.getRegistrationRequestForTesting(30001,
                 SauceLabsRemoteProxy.class.getCanonicalName());
@@ -53,7 +66,11 @@ public class SauceLabsRemoteProxyTest {
     }
 
     @After
-    public void tearDown() {
+    public void tearDown() throws MalformedObjectNameException {
+        ObjectName objectName = new ObjectName("org.seleniumhq.grid:type=RemoteProxy,node=\"https://ondemand.saucelabs.com:443\"");
+        new JMXHelper().unregister(objectName);
+        objectName = new ObjectName("org.seleniumhq.grid:type=RemoteProxy,node=\"http://localhost:30000\"");
+        new JMXHelper().unregister(objectName);
         SauceLabsRemoteProxy.restoreCommonProxyUtilities();
         SauceLabsRemoteProxy.restoreGa();
         SauceLabsRemoteProxy.restoreEnvironment();
@@ -117,8 +134,7 @@ public class SauceLabsRemoteProxyTest {
 
         // We need to mock all the needed objects to forward the session and see how in the beforeMethod
         // the SauceLabs user and api key get added to the body request.
-        WebDriverRequest request = TestUtils.getMockedWebDriverRequestStartSession();
-
+        WebDriverRequest request = TestUtils.getMockedWebDriverRequestStartSession(BrowserType.SAFARI, Platform.MAC);
         HttpServletResponse response = mock(HttpServletResponse.class);
         ServletOutputStream stream = mock(ServletOutputStream.class);
         when(response.getOutputStream()).thenReturn(stream);
@@ -128,8 +144,8 @@ public class SauceLabsRemoteProxyTest {
         Environment env = new Environment();
 
         // The body should now have the SauceLabs variables
-        String expectedBody = String.format("{\"desiredCapabilities\":{\"browserName\":\"internet explorer\",\"platform\":" +
-                        "\"WIN8\",\"username\":\"%s\",\"accessKey\":\"%s\",\"version\":\"latest\"}}",
+        String expectedBody = String.format("{\"desiredCapabilities\":{\"browserName\":\"safari\",\"platform\":" +
+                        "\"MAC\",\"username\":\"%s\",\"accessKey\":\"%s\",\"version\":\"latest\"}}",
                 env.getStringEnvVariable("SAUCE_USERNAME", ""),
                 env.getStringEnvVariable("SAUCE_ACCESS_KEY", ""));
         verify(request).setBody(expectedBody);
@@ -244,7 +260,39 @@ public class SauceLabsRemoteProxyTest {
         } finally {
             SauceLabsRemoteProxy.restoreGa();
         }
+    }
 
+    @Test
+    public void slotIsReleasedWhenTestIsIdle() throws IOException {
+
+        // Supported desired capability for the test session
+        Map<String, Object> requestedCapability = new HashMap<>();
+        requestedCapability.put(CapabilityType.BROWSER_NAME, BrowserType.SAFARI);
+        requestedCapability.put(CapabilityType.PLATFORM, Platform.MAC);
+
+        SauceLabsRemoteProxy sauceLabsSpyProxy = spy(sauceLabsProxy);
+
+        // Set a short idle time
+        sauceLabsSpyProxy.setMaxTestIdleTime(1L);
+
+        // Start poller thread
+        sauceLabsSpyProxy.startPolling();
+
+        // Get a test session
+        TestSession newSession = sauceLabsSpyProxy.getNewSession(requestedCapability);
+        Assert.assertNotNull(newSession);
+        newSession.setExternalKey(new ExternalSessionKey("RANDOM_EXTERNAL_KEY"));
+
+        // Start the session
+        WebDriverRequest request = TestUtils.getMockedWebDriverRequestStartSession(BrowserType.SAFARI, Platform.MAC);
+        HttpServletResponse response = mock(HttpServletResponse.class);
+        ServletOutputStream stream = mock(ServletOutputStream.class);
+        when(response.getOutputStream()).thenReturn(stream);
+        sauceLabsSpyProxy.beforeCommand(newSession, request, response);
+
+        // The terminateIdleSessions() method should be called after a moment
+        verify(sauceLabsSpyProxy, timeout(2000)).terminateIdleSessions();
+        verify(sauceLabsSpyProxy, timeout(2000)).addTestToDashboard("RANDOM_EXTERNAL_KEY", false);
     }
 
 

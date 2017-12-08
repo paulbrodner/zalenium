@@ -2,12 +2,12 @@ package de.zalando.ep.zalenium.servlet;
 
 import com.google.common.io.ByteStreams;
 import de.zalando.ep.zalenium.servlet.renderer.TemplateRenderer;
-import org.openqa.grid.internal.Registry;
+import org.openqa.grid.internal.GridRegistry;
 import org.openqa.grid.internal.RemoteProxy;
 import org.openqa.grid.internal.utils.configuration.GridHubConfiguration;
 import org.openqa.grid.web.servlet.RegistryBasedServlet;
+import org.openqa.selenium.MutableCapabilities;
 import org.openqa.selenium.internal.BuildInfo;
-import org.openqa.selenium.remote.DesiredCapabilities;
 
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServletRequest;
@@ -31,7 +31,7 @@ public class ZaleniumConsoleServlet extends RegistryBasedServlet {
         this(null);
     }
 
-    public ZaleniumConsoleServlet(Registry registry) {
+    public ZaleniumConsoleServlet(GridRegistry registry) {
         super(registry);
         coreVersion = new BuildInfo().getReleaseLabel();
         String templateFile = "html_templates/zalenium_console_servlet.html";
@@ -117,7 +117,7 @@ public class ZaleniumConsoleServlet extends RegistryBasedServlet {
 
     private String getRequestQueue() {
         StringBuilder requestQueue = new StringBuilder();
-        for (DesiredCapabilities req : getRegistry().getDesiredCapabilities()) {
+        for (MutableCapabilities req : getRegistry().getDesiredCapabilities()) {
             Map<String, String> pendingRequest = new HashMap<>();
             pendingRequest.put("{{pendingRequest}}", req.toString());
             requestQueue.append(templateRenderer.renderSection("{{requestQueue}}", pendingRequest));
@@ -132,7 +132,7 @@ public class ZaleniumConsoleServlet extends RegistryBasedServlet {
      */
     private String getConfigInfo(boolean verbose) {
 
-        GridHubConfiguration config = getRegistry().getConfiguration();
+        GridHubConfiguration config = getRegistry().getHub().getConfiguration();
         Map<String, String> configInfoValues = new HashMap<>();
         configInfoValues.put("{{hubCurrentConfig}}", prettyHtmlPrint(config));
 

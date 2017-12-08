@@ -13,8 +13,9 @@ import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 import org.openqa.grid.common.RegistrationRequest;
+import org.openqa.grid.internal.DefaultGridRegistry;
 import org.openqa.grid.internal.ExternalSessionKey;
-import org.openqa.grid.internal.Registry;
+import org.openqa.grid.internal.GridRegistry;
 import org.openqa.grid.internal.RemoteProxy;
 import org.openqa.grid.internal.TestSession;
 import org.openqa.grid.web.servlet.handler.RequestType;
@@ -22,23 +23,30 @@ import org.openqa.grid.web.servlet.handler.WebDriverRequest;
 import org.openqa.selenium.Platform;
 import org.openqa.selenium.remote.BrowserType;
 import org.openqa.selenium.remote.CapabilityType;
+import org.openqa.selenium.remote.server.jmx.JMXHelper;
 
+import javax.management.MalformedObjectNameException;
+import javax.management.ObjectName;
 import javax.servlet.ServletOutputStream;
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
-import java.util.*;
+import java.util.Collections;
+import java.util.Enumeration;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 import static org.mockito.Mockito.*;
 
 public class BrowserStackRemoteProxyTest {
 
     private BrowserStackRemoteProxy browserStackProxy;
-    private Registry registry;
+    private GridRegistry registry;
 
     @SuppressWarnings("ConstantConditions")
     @Before
     public void setUp() {
-        registry = Registry.newInstance();
+        registry = DefaultGridRegistry.newInstance();
         // Creating the configuration and the registration request of the proxy (node)
         RegistrationRequest request = TestUtils.getRegistrationRequestForTesting(30002,
                 BrowserStackRemoteProxy.class.getCanonicalName());
@@ -58,7 +66,11 @@ public class BrowserStackRemoteProxyTest {
     }
 
     @After
-    public void tearDown() {
+    public void tearDown() throws MalformedObjectNameException {
+        ObjectName objectName = new ObjectName("org.seleniumhq.grid:type=RemoteProxy,node=\"http://hub-cloud.browserstack.com:80\"");
+        new JMXHelper().unregister(objectName);
+        objectName = new ObjectName("org.seleniumhq.grid:type=RemoteProxy,node=\"http://localhost:30000\"");
+        new JMXHelper().unregister(objectName);
         BrowserStackRemoteProxy.restoreCommonProxyUtilities();
         BrowserStackRemoteProxy.restoreGa();
         BrowserStackRemoteProxy.restoreEnvironment();
@@ -98,7 +110,7 @@ public class BrowserStackRemoteProxyTest {
 
         // We need to mock all the needed objects to forward the session and see how in the beforeMethod
         // the SauceLabs user and api key get added to the body request.
-        WebDriverRequest request = TestUtils.getMockedWebDriverRequestStartSession();
+        WebDriverRequest request = TestUtils.getMockedWebDriverRequestStartSession(BrowserType.IE, Platform.WIN8);
 
         HttpServletResponse response = mock(HttpServletResponse.class);
         ServletOutputStream stream = mock(ServletOutputStream.class);
